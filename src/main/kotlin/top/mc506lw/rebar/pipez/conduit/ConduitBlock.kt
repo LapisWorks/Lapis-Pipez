@@ -190,11 +190,27 @@ class ConduitBlock :
      *
      * ⚠️ **向后兼容**：老存档只有整管的 [PipezKeys.TIER]。读出来就当作
      * "六个面都插了对应档位的模块"（[legacyTier]），行为保持不变。
+     *
+     * ## ⚠️ 但老键必须"只认真正的老存档"（踩过）
+     *
+     * [PipezKeys.SIDE_UPGRADES] 只要**写过一次**就会一直留在 PDC 里，所以它可以当
+     * "这根管子用过每面模块（新式存档）"的判据。
+     *
+     * 反之，如果把老键无条件读成 [legacyTier]，就会出现**自噬**：
+     * 0.1.55 之前的 `write()` 每次存档都会把"最高档"写进老键，
+     * 于是玩家**拆掉升级模块之后，界面还显示究极** —— 因为
+     * `tierOf(face) = upgradeTierOrNull(face) ?: legacyTier`，模块没了就回退到那个键上。
+     * （用户实测："我把升级拿掉它还显示究极"。）
      */
     private fun loadSideSettings(pdc: PersistentDataContainer) {
-        legacyTier = ConduitTier.fromOrdinal(
-            pdc.get(PipezKeys.TIER, PersistentDataType.BYTE)?.toInt() ?: 0
-        )
+        // 有过 SIDE_UPGRADES 键 = 新式存档 → **老键一律不认**（还要顺手清掉，见 [write]）。
+        legacyTier = if (pdc.has(PipezKeys.SIDE_UPGRADES)) {
+            ConduitTier.BASIC
+        } else {
+            ConduitTier.fromOrdinal(
+                pdc.get(PipezKeys.TIER, PersistentDataType.BYTE)?.toInt() ?: 0
+            )
+        }
 
         pdc.get(PipezKeys.SIDE_UPGRADES, PersistentDataType.STRING)?.let { encoded ->
             for (entry in encoded.split(';')) {
@@ -478,10 +494,22 @@ class ConduitBlock :
             pdc.set(PipezKeys.SIDE_FILTERS, PersistentDataType.STRING, encoded)
         }
 
-        // ⚠️ 旧的"整管档位"键：老版本读它。现在档位是每面一个模块，
-        // 这里写"所有面里最高的那一档"，让回滚到旧版本的玩家至少不会掉档。
+        // ⚠️ 旧的"整管档位"键（`PipezKeys.TIER`）：**只留给 0.1.37 之前的老存档**。
+        //
+        // 原来的写法是"每次存档都写一遍最高档"，好让回滚到旧版本的玩家不掉档。
+        // 但那会**自噬**：写进去的键在下一次加载时被读成 `legacyTier`，
+        // 于是"拆掉升级模块之后界面还显示究极"（用户实测）。详见 [loadSideSettings]。
+        //
+        // 现在：
+        // - **新式存档**（有过 SIDE_UPGRADES 键，即用过每面模块）→ 清掉老键，且不再写；
+        // - **真·老存档**（从来没有 SIDE_UPGRADES）→ 继续写，保住降级兼容。
+        //
+        // `SIDE_UPGRADES` 只要写过就一直留在 PDC 里（上面那段只在非空时写），
+        // 所以"拆光模块"之后这个判据依然成立 —— 这正是我们要的。
         val bestTier = CARDINAL_FACES.map { tierOf(it) }.maxByOrNull { it.ordinal } ?: ConduitTier.BASIC
-        if (bestTier != ConduitTier.BASIC) {
+        if (pdc.has(PipezKeys.SIDE_UPGRADES)) {
+            pdc.remove(PipezKeys.TIER)
+        } else if (bestTier != ConduitTier.BASIC) {
             pdc.set(PipezKeys.TIER, PersistentDataType.BYTE, bestTier.ordinal.toByte())
         }
     }
@@ -1379,6 +1407,10 @@ class ConduitBlock :
         // ⚠️ 存**副本**：调用方可能把 ItemStack 交给虚拟库存继续用，
         // 共享同一个引用会让"界面里的物品"和"管子里的物品"互相串改。
         if (stack != null && stack.type != Material.AIR) sideUpgrades[face] = stack.clone()
+        // ⚠️ 一旦玩家真的用上了"每面模块"，就**丢掉老存档的整管档位兜底** ——
+        // 否则会出现"拆掉升级模块之后，界面还显示究极"（用户实测）。
+        // 老存档根本没模块可拆，走不到这里，兼容性不受影响。
+        if (sideUpgrades.isEmpty()) legacyTier = ConduitTier.BASIC
         // 档位变了 → 这一面的边限流要重写
         applyTierToFace(face)
         ConduitNetwork.markAround(block.position)
