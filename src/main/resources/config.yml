@@ -3,19 +3,26 @@
 # ==========================================================================
 
 conduit:
-  # ⚠️ 是否启用"档位限流"（把档位容量写进 Edge.powerLimit = 每 tick 过流上限）。
+  # 是否启用"档位限流"（把档位容量写进 Edge.powerLimit = 每 tick 过流上限）。默认 true。
   #
-  # 默认 false = **不限流**，和隔壁 Lapis-Cable 一样。这是唯一安全的默认值：
-  # Rebar 的 ElectricConsumerNode **没有能量缓冲**，它每 tick 报一个 requiredPower，
-  # 网络必须当 tick 给满，否则 isPowered=false、机器**完全不工作**（不是"变慢"）。
-  # 所以上限一旦低于机器需求，就等于把机器关掉 —— 实测：1024 能带动铜熔炉（约 44 W），
-  # 却把下界合金熔炉（4800~19200 W）直接卡死。
+  # 这是"档位"在电学上唯一的体现。关掉它，裸管道就是**不限流**的 ——
+  # 表现是"啥升级都没插的管道照样带动满速下界合金熔炉"，档位就只剩解锁界面功能了。
   #
-  # 想要 Pipez 式的限流再打开它，并用下面的 capacity-multiplier 调大小。
-  # Enable per-tier throughput limiting (Edge.powerLimit). Default false = unlimited,
-  # matching Lapis-Cable. Rebar consumers have NO energy buffer, so a cap below a
-  # machine's per-tick draw silently stops it from working entirely.
-  tier-power-limit: false
+  # 各档上限（照 Lapis-Cable 的尺子：1 个下界合金锭 = 8192 W）：
+  #   裸管/基础 8192 W  → 铜熔炉(约 178 W) 可以，下界合金(19200 W) 带不动
+  #   强化     16384 W
+  #   高级     32768 W  → 满速下界合金够用
+  #   究极     73728 W
+  #
+  # ⚠️ Rebar 的 ElectricConsumerNode **没有能量缓冲**：每 tick 必须给满 requiredPower，
+  # 给不满机器就**完全不工作**（不是"变慢"）。所以任何低于机器需求的上限都等于把机器关掉。
+  # 遇到"电在掉、机器不干活"，先看界面里的「当前升级 / 本面上限」那两行。
+  # 想彻底不限流就设成 false（像 Lapis-Cable 那样）。
+  #
+  # Per-tier throughput limiting. Default true. This is the ONLY place a tier matters
+  # electrically. WARNING: Rebar consumers have NO energy buffer — a cap below a machine's
+  # per-tick draw stops it from working entirely, not "slower". Set false for unlimited.
+  tier-power-limit: true
 
   # 整体倍率：所有档位的容量都乘它（仅在 tier-power-limit 为 true 时有意义）。
   # Global multiplier applied to every tier's capacity (only used when limiting is on).

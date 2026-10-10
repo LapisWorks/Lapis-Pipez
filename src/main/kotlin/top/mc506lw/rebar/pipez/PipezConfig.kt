@@ -17,21 +17,34 @@ object PipezConfig {
         get() = positive("conduit.capacity-multiplier", 1.0)
 
     /**
-     * 是否把档位容量写进 `Edge.powerLimit`（**每 tick 的过流上限**）。
+     * 是否把档位容量写进 `Edge.powerLimit`（**每 tick 的过流上限**）。**默认 true**。
      *
-     * ⚠️ **默认 false（不限流）** —— 这是刻意的，也是唯一安全的默认值：
+     * ## 为什么默认开
      *
-     * - Rebar 的 `ElectricConsumerNode` **没有能量缓冲**：它每 tick 报一个 `requiredPower`，
-     *   网络必须当 tick 给满，否则 `isPowered` 为 false、机器**完全不工作**。
-     *   `calculateLoadOnEdges` 用 `powerLimit - 已用` 卡过流量，给不满就是给不满。
-     * - 所以上限**低于机器需求时会直接卡死机器**，而不是"供得慢一点"。
-     * - 隔壁 `Lapis-Cable` 就完全不设上限（它的"容量"只用来显示 tooltip），所以它能带动
-     *   我们的管子带不动的机器 —— 用户实测。
+     * 这是"档位"在**电学上**唯一的体现。关掉它，裸管道就是**不限流**的 ——
+     * 表现是"啥升级都没插的管道照样带动满速下界合金熔炉（19200 W）"，
+     * 档位就只剩下"解锁界面功能"那点作用了。
      *
-     * 想要 Pipez 式的限流就把它设成 `true`，再用 [capacityMultiplier] 调大小。
+     * 而档位容量是照 `Lapis-Cable` 的尺子定的（1 个下界合金锭 = 8192 W），
+     * 所以：
+     * - 裸管 / 基础档 = **8192 W** → 铜熔炉（约 178 W）没问题，下界合金（19200 W）**带不动**
+     * - 高级档 = **32768 W**、究极档 = **73728 W** → 带得动满速下界合金
+     *
+     * ## ⚠️ 代价（必须知道）
+     *
+     * Rebar 的 `ElectricConsumerNode` **没有能量缓冲**：它每 tick 报一个 `requiredPower`，
+     * 网络必须当 tick 给满，否则 `isPowered` 为 false、机器**完全不工作** ——
+     * 不是"供得慢一点"，是直接停摆。`calculateLoadOnEdges` 用 `powerLimit - 已用` 卡流量，
+     * 给不满就是给不满。
+     *
+     * 所以**任何低于机器每 tick 需求的上限都等于把机器关掉**。遇到"电在掉、机器不干活"，
+     * 先看界面里的「当前升级 / 本面上限」那两行，八成是档位不够。
+     *
+     * 想彻底不限流（像 Lapis-Cable 那样）就把 `conduit.tier-power-limit` 设成 `false`，
+     * 再用 [capacityMultiplier] 整体调大小。
      */
     val tierPowerLimit: Boolean
-        get() = config.getBoolean("conduit.tier-power-limit", false)
+        get() = config.getBoolean("conduit.tier-power-limit", true)
 
     /**
      * 某一档的传输上限（瓦特）= 该档基础容量 × 整体倍率。
