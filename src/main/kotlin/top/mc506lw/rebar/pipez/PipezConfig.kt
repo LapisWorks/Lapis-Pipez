@@ -138,6 +138,24 @@ object PipezConfig {
     val bandLength: Double
         get() = config.getDouble("render.band-length", 0.08).coerceAtLeast(0.01)
 
+    /**
+     * 是否画两条彩条（管道的"＋"形截面身份色）。**默认开**。
+     *
+     * ⚠️ 这是**纯装饰**，但它占每臂实体数的 2/3（每臂 = 管身 + 2 彩条）。
+     * 关掉之后实体数直接降到 1/3 —— 锯齿状大管网（拐弯多、贪心合并几乎不生效）
+     * 卡 TPS 时，这是最有效的一刀。
+     */
+    val renderStripes: Boolean
+        get() = config.getBoolean("render.stripes", true)
+
+    /**
+     * 是否画彩箍（每格一圈的细环）。**默认开**。
+     *
+     * ⚠️ 同样是纯装饰，但**每格/每臂一个**，所以在大型管网里是数量最多的一类实体。
+     */
+    val renderBands: Boolean
+        get() = config.getBoolean("render.bands", true)
+
     /** 物品端点每 tick 最多搬运几个物品。 */
     val itemsPerTick: Int
         get() = config.getInt("cargo.items-per-tick", 8).coerceAtLeast(1)

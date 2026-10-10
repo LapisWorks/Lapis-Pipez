@@ -57,6 +57,21 @@ render:
   #
   # Stripe colours are fixed per pipe type (energy = red, fluid = blue) in PipeType.kt.
 
+  # ⚠️⚠️ 性能开关：管道的每一"臂"要 3 个展示实体（管身 + 2 条彩条），
+  # 拐弯块 2 臂 = 6 个，三通 3 臂 = 9 个，十字 4 臂 = 12 个，再加彩箍和中心块。
+  # 所以**锯齿状 / 缠绕的大管网**（拐弯多、贪心合并几乎不生效）实体数会非常高。
+  #
+  # 实测参考：一片几百格的锯齿网 ≈ 每格 9 个实体。真卡 TPS 时按下面顺序关：
+  #   1) render.bands: false   —— 每格省 1 个（数量最多的一类）
+  #   2) render.stripes: false —— 每臂从 3 个降到 1 个（省 2/3，最有效）
+  # 代价是管道只剩黑管身，不再有身份色和彩箍。
+  #
+  # Performance switches. Each pipe "arm" costs 3 display entities (body + 2 stripes);
+  # a corner = 6, a tee = 9, a cross = 12, plus bands and the hub. Dense zigzag networks
+  # therefore produce a LOT of entities. Turn bands off first, then stripes.
+  stripes: true
+  bands: true
+
   body-thickness: 0.32      # 管身粗细（格）
   stripe-thickness: 0.11    # 彩条粗细，约管身的 1/3
   stripe-protrusion: 0.03   # 彩条比管身表面凸出多少（太小会看不出、也容易抢面）

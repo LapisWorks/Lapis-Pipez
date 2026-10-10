@@ -308,6 +308,11 @@ class ConduitBlock :
         healLegacyBlockType()
         ensureHolderRegistered()
         ensureNodeIfEnergy()
+        // ⚠️ 孤儿实体清扫**只在这里做**（加载时），不要放进 [clearDisplays]。
+        // 它要 `world.getNearbyEntities(1.5³)` 扫一遍附近实体；放进每次重建里的话，
+        // 一个几千格的管网就是"每格每次重建一次实体查询"，直接拖垮服务器。
+        // 它本来也只是给"插件热更后旧实体没人认领"兜底用的，加载时扫一次足够。
+        purgeOrphanedDisplays()
         ConduitNetwork.markAround(block.position)
     }
 
@@ -852,10 +857,12 @@ class ConduitBlock :
         // 于是正好在正中间（0.5）放了一道箍，把一整根管从视觉上切成两截。
         // 现在改成：**只有当那一格边界两侧都是管身**（即不是 run 的端点）时才放，
         // 所以 2 通直管中间不会再出现那道箍。
+        // 彩箍同样是纯装饰，而且**每格一个**（长直管上也一样）——
+        // 关掉它对实体数的贡献最大（见 config.yml 的 render.bands）。
         val bandT = PipezConfig.bandThickness - jitterFor(face)
         val bandHalf = PipezConfig.bandLength * 0.5
         var offset = 1.0
-        while (offset < runLength) {
+        while (PipezConfig.renderBands && offset < runLength) {
             val center = axis.clone().multiply(offset)
             addEntity(
                 "${DISPLAY_PREFIX}band:${face.name}:$offset",
@@ -934,7 +941,9 @@ class ConduitBlock :
             getHeldEntity(name)?.remove()
             heldEntities.remove(name)
         }
-        purgeOrphanedDisplays()
+        // ⚠️ 这里**不**调 [purgeOrphanedDisplays]（见那里的说明）：
+        // 它要做一次 `getNearbyEntities` 实体查询，放进每次重建里会在
+        // 大型管网上变成"每格每次重建一次全实体扫描"。改到 [postLoad] 做。
     }
 
     /**
@@ -945,8 +954,14 @@ class ConduitBlock :
      * （旧版创建的实体不在新版的 `heldEntities` 里），那些实体就再也没人认领 ——
      * 它们会一直留在世界里，表现为"凭空多出来的短壁 / 短臂"。
      *
-     * 这里在重建显示时顺手扫一下方块附近的 `ItemDisplay`：
-     * **PDC 里 blockKey 指向本方块、但不在 heldEntities 里的，一律删掉。**
+     * 扫一下方块附近的 `ItemDisplay`：**PDC 里 blockKey 指向本方块、
+     * 但不在 heldEntities 里的，一律删掉。**
+     *
+     * ⚠️ **只在 [postLoad] 调一次**，不要挂进 [clearDisplays]。
+     * 原因：这里的 `getNearbyEntities(1.5³)` 是**服务端实体查询**，
+     * 代价随附近实体数增长。管网一大（用户实测：一片几百格的锯齿网），
+     * 每次重建都扫一遍会直接把 TPS 拖死。而它要解决的只是
+     * "插件热更后旧实体没人认领"，加载时扫一次就够了。
      */
     private fun purgeOrphanedDisplays() {
         val owned = heldEntities.values.toHashSet()
@@ -1090,15 +1105,19 @@ class ConduitBlock :
         // ⚠️ 管身和彩条共用**同一组基本端点**；彩条只在接头端伸到"盖住对方"的深度。
         spawnRod(spawn, bodyName(face), bodyFrom, bodyTo, jitterFor(face), stripeFrom, stripeTo)
 
-        // 彩箍：段中点套一圈。粗细要**只比管身粗一点点**，且和彩条全宽错开
-        val mid = offset.clone().multiply(0.5)
-        val half = axis.clone().multiply(PipezConfig.bandLength * 0.5)
-        val bandT = PipezConfig.bandThickness - jitterFor(face)
-        addEntity(
-            bandName(face),
-            box(spawn, mid.clone().subtract(half), mid.clone().add(half),
-                bandT, bandT, pipeType.stripeMaterial, "band")
-        )
+        // 彩箍：段中点套一圈。粗细要**只比管身粗一点点**，且和彩条全宽错开。
+        // 纯装饰，可关（见 config.yml 的 render.bands）—— 拐弯块**每条臂一个**，
+        // 是锯齿状管网里最容易被忽视的实体来源。
+        if (PipezConfig.renderBands) {
+            val mid = offset.clone().multiply(0.5)
+            val half = axis.clone().multiply(PipezConfig.bandLength * 0.5)
+            val bandT = PipezConfig.bandThickness - jitterFor(face)
+            addEntity(
+                bandName(face),
+                box(spawn, mid.clone().subtract(half), mid.clone().add(half),
+                    bandT, bandT, pipeType.stripeMaterial, "band")
+            )
+        }
 
         // 方向指示：只在"这一面接着机器"时画。
         // 管段之间没有方向（同类管互通是双向的），画了只会让画面变乱。
@@ -1208,6 +1227,9 @@ class ConduitBlock :
             "$namePrefix:body",
             boxRaw(spawn, bodyMid, bodyLen, bodyT, bodyT, dir, pipeType.bodyMaterial, "body")
         )
+        // 彩条是**纯装饰**（管道的"＋"形截面身份色）。每臂 3 个实体里它占 2 个，
+        // 所以大管网上把它关掉能直接把实体数砍到 1/3（见 config.yml 的 render.stripes）。
+        if (!PipezConfig.renderStripes) return
         addEntity(
             "$namePrefix:s0",
             boxRaw(spawn, sMid, sLen, full, thin, dir, pipeType.stripeMaterial, "stripe")
