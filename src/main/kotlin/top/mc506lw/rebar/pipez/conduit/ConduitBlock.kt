@@ -1351,15 +1351,20 @@ class ConduitBlock :
     fun sideUpgrade(face: BlockFace): ItemStack? = sideUpgrades[face]
 
     /**
-     * 这个面的档位 —— **直接从槽里的模块推导**（Pipez 的 `getUpgrade(side)`）。
+     * 这个面的档位 —— **本面槽里的模块**（Pipez 的 `getUpgrade(side)`）。
      *
-     * 没插模块 → [ConduitTier.BASIC]。老存档里"整管档位"由 [legacyTier] 兜住。
+     * 没插模块 → [legacyTier]（老存档的"整管档位"，否则就是基础档）。
+     *
+     * ## ⚠️ 这个档位**只在"抽取面"上才有电学意义**
+     *
+     * 对标 Pipez 的 `pullEnergy`：速率是 `getRate(tileEntity, side)`，其中 `side` 是
+     * **正在抽取的那一面**。接收面根本不参与那次搬运。
+     *
+     * 所以 [refreshElectric] 里**只给"抽取面"那条边写 `powerLimit`**，
+     * 其余边一律不限流。见那里的注释。
      */
-    fun tierOf(face: BlockFace): ConduitTier {
-        val stack = sideUpgrades[face] ?: return legacyTier
-        val rebar = RebarItem.fromStack(stack, UpgradeItem::class.java) ?: return legacyTier
-        return ConduitTier.fromItemKey(rebar.key.key) ?: legacyTier
-    }
+    fun tierOf(face: BlockFace): ConduitTier =
+        upgradeTierOrNull(face) ?: legacyTier
 
     /**
      * 往某个面的槽里放 / 拿升级模块（[stack] 为 null = 拔出）。
@@ -1583,8 +1588,10 @@ class ConduitBlock :
     /**
      * 把这一面的档位重写到它那条边（只有能量管才有"边限流"）。
      *
-     * 只在"这一面接着机器端口、而且已经连上"时才需要 ——
-     * 管段之间的边不设限流。
+     * ⚠️ **只有"抽取面"才写上限**，其余面写回"不限" —— 对标 Pipez 的
+     * `pullEnergy`：速率属于抽取面，接收面不参与那次搬运。详见 [applyEdgeLimit]。
+     *
+     * 只在"这一面接着机器端口、而且已经连上"时才需要 —— 管段之间的边不设限流。
      */
     private fun applyTierToFace(face: BlockFace) {
         if (pipeType.category != PipeType.Category.ENERGY) return
@@ -1592,7 +1599,7 @@ class ConduitBlock :
         val neighbor = rebarAt(block.getRelative(face)) as? ElectricRebarBlock ?: return
         val port = ConduitLinker.portNodeFacing(neighbor, face.oppositeFace) ?: return
         if (!node.isConnectedTo(port)) return
-        applyEdgeLimit(node, port, tierOf(face))
+        applyEdgeLimit(node, port, if (faceMode(face).directional) tierOf(face) else null)
     }
 
     // ---------------------------------------------------------------- 网络
@@ -1730,8 +1737,16 @@ class ConduitBlock :
         // 边限流：**每次 refresh 都重写**（不只是新连的边）。
         // 玩家可能只是把某个面的升级模块换了一档、连接没变，
         // 这时差集逻辑不会碰这条边，但限流值必须跟着更新。
+        //
+        // ⚠️ **只有"抽取面"那条边限流**，其余边写回"不限"。
+        // 对标 Pipez 的 `pullEnergy`：`getRate(tileEntity, side)` 里的 `side` 是
+        // **正在抽取的那一面**，接收面不参与那次搬运。
+        // 而 `calculateLoadOnEdges` 会让**路径吞吐 = 路径上所有边的最小值**，
+        // 所以把上限写在接收面上（比如"管道→机器"那条）会把整条路径压死 ——
+        // 实测教训：究极插在电源面、机器面没插 → 压到基础档 8192 W →
+        // 下界合金只带得动 2 组并行（2×3200=6400 ✔ / 3×3200=9600 ✘）。
         for (target in targets) {
-            applyEdgeLimit(node, target, targetTiers[target] ?: ConduitTier.BASIC)
+            applyEdgeLimit(node, target, if (target in extractPorts) targetTiers[target] else null)
         }
 
         // 逐面套上方向限制。**每次 refresh 都要重写**（包括已经连上的边）——
@@ -1864,27 +1879,40 @@ class ConduitBlock :
     }
 
     /**
-     * 给这条边设容量上限。
+     * 给这条边设容量上限。[tier] 为 `null` = **不限流**（写 Rebar 的默认值 `MAX_VALUE`）。
      *
-     * 能量侧"限流"本来挂在电线上（`WireRebarItem.getMaxPower` → `Edge.powerLimit`）。
-     * 管段不是电线，所以要自己写这个上限，否则管道是无限载的。
+     * ## 什么时候才该传非 null —— 只有"抽取面"
      *
-     * 注意 `Edge.powerLimit` 的存储键是**有方向**的（`from.id → to.id`），
-     * 所以两个方向都要写。
+     * 对标 Pipez 的 `EnergyPipeType.pullEnergy`：
+     * ```java
+     * if (!tileEntity.isExtracting(side)) return;              // 只有抽取面动
+     * int energyToTransfer = getRate(tileEntity, side);        // 速率 = 【抽取面】的升级
+     * ```
+     * **速率只属于抽取面**，接收面不参与那次搬运（`insert` 那边没有 rate 限制）。
+     *
+     * 所以 [refreshElectric] 只给"抽取面 ↔ 机器"那条边写上限，其余边一律不限。
+     *
+     * ## ⚠️ 为什么这条边**必须**限
+     *
+     * Rebar 的 `ElectricConsumerNode` **没有能量缓冲**：每 tick 必须给满 `requiredPower`，
+     * 给不满就 `isPowered = false`、机器**完全不工作**（不是变慢）。
+     * 而 `calculateLoadOnEdges` 用 `powerLimit − 已用` 卡每条边，
+     * **路径吞吐 = 路径上所有边里最小的那个**。
+     *
+     * 所以"在哪条边上写上限"非常关键 —— 写错边（比如写在接收面）就会莫名其妙地把
+     * 整条路径压死。实测教训：究极插在电源面、机器面没插 → 被压到基础档 8192 W →
+     * 下界合金只带得动 2 组并行（2×3200=6400 ✔ / 3×3200=9600 ✘）。
+     *
+     * ## 存储细节
+     *
+     * `Edge.powerLimit` 的键是**有方向**的（`from.id → to.id`），所以两个方向都要写。
+     * 每次都写（不限也写 `MAX_VALUE`）是刻意的：旧版本留在世界 PDC 里的旧上限会被
+     * **覆盖清掉**，服主不用手动清理存档。
+     *
+     * 整体开关：`config.yml` 的 `conduit.tier-power-limit`（false = 永远不限）。
      */
-    private fun applyEdgeLimit(a: ElectricNode, b: ElectricNode, tier: ConduitTier) {
-        // ⚠️ 默认**不写上限**（写成 Rebar 的默认值 `Double.MAX_VALUE` = 不限）。
-        //
-        // 为什么：Rebar 的 `ElectricConsumerNode` 没有能量缓冲，每 tick 必须给满
-        // `requiredPower`，给不满就**完全不工作**（不是变慢）。所以任何低于机器需求的
-        // 上限都等于"把机器关掉"。隔壁 Lapis-Cable 就完全不设上限 —— 用户实测它能带动
-        // 我们的管子带不动的机器。
-        //
-        // 而且这里**每次都写**（哪怕不限流也写 MAX_VALUE）是刻意的：这样旧版本
-        // 留在世界 PDC 里的旧上限会被**覆盖清掉**，不用让服主手动清理存档。
-        //
-        // 想要 Pipez 式限流：config.yml 的 `conduit.tier-power-limit: true`。
-        val limit = if (PipezConfig.tierPowerLimit) {
+    private fun applyEdgeLimit(a: ElectricNode, b: ElectricNode, tier: ConduitTier?) {
+        val limit = if (PipezConfig.tierPowerLimit && tier != null) {
             PipezConfig.capacity(tier)
         } else {
             Double.MAX_VALUE

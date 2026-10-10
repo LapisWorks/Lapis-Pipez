@@ -57,18 +57,29 @@ class WrenchItem(stack: ItemStack) : RebarItem(stack), InteractRebarItemHandler 
 
         // 即时反馈 —— 之前扳手"切了但看不出来"，玩家不知道到底生效没有。
         // 顺手把**这一面的档位/上限**也报出来，方便确认升级模块到底有没有被读进去。
-        val text = StringBuilder()
-            .append(faceName(face)).append(" · ").append(modeName(mode))
+        //
+        // ⚠️ 这里必须**拼 Component**，不能拼 StringBuilder：
+        // `UnitFormat.WATTS.format(...)` 返回的是 `UnitFormat.Formatted`（一个 `ComponentLike`），
+        // 直接丢进字符串模板 / `StringBuilder.append(Object)` 会走到它的 `toString()`，
+        // 打出来就是 `io.github.pylonmc.rebar.util.gui.unit.UnitFormat$Formatted@52be6103`。
+        // 正确做法是 `.build()` 成 `Component` 再 append。
+        var msg: Component = Component.text("${faceName(face)} · ${modeName(mode)}", NamedTextColor.YELLOW)
         if (conduit.acceptsUpgrade()) {
             val tier = conduit.tierOf(face)
-            text.append("  |  档位 ").append(tierName(tier))
-            if (PipezConfig.tierPowerLimit) {
-                text.append("（限流 ").append(UnitFormat.WATTS.format(PipezConfig.capacity(tier))).append("）")
-            } else {
-                text.append("（未限流）")
+            msg = msg.append(Component.text("  |  档位 ${tierName(tier)}", NamedTextColor.YELLOW))
+            // ⚠️ 档位**只在抽取面上有电学意义**（对标 Pipez：速率属于抽取面）。
+            // 所以只有刚切到"抽取"时才报上限，免得在普通面上给出误导信息。
+            if (mode.directional) {
+                msg = if (PipezConfig.tierPowerLimit) {
+                    msg.append(Component.text("（本面限流 ", NamedTextColor.YELLOW))
+                        .append(UnitFormat.WATTS.format(PipezConfig.capacity(tier)).build())
+                        .append(Component.text("）", NamedTextColor.YELLOW))
+                } else {
+                    msg.append(Component.text("（限流已在 config 关闭）", NamedTextColor.YELLOW))
+                }
             }
         }
-        event.player.sendActionBar(Component.text(text.toString(), NamedTextColor.YELLOW))
+        event.player.sendActionBar(msg)
     }
 
     private fun faceName(face: BlockFace): String = when (face) {

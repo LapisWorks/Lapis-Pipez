@@ -5,23 +5,31 @@
 conduit:
   # 是否启用"档位限流"（把档位容量写进 Edge.powerLimit = 每 tick 过流上限）。默认 true。
   #
-  # 这是"档位"在电学上唯一的体现。关掉它，裸管道就是**不限流**的 ——
-  # 表现是"啥升级都没插的管道照样带动满速下界合金熔炉"，档位就只剩解锁界面功能了。
+  # ⚠️ 限流**只写在"抽取面"那条边上**，对标 Pipez 的 pullEnergy：
+  #     if (!tileEntity.isExtracting(side)) return;         // 只有抽取面动
+  #     int energyToTransfer = getRate(tileEntity, side);   // 速率 = 【抽取面】的升级
+  # 接收面不参与那次搬运，所以"管道 → 机器"那种边**不限流**。
+  #
+  # 为什么这条边这么关键：Rebar 的 calculateLoadOnEdges 用 powerLimit 卡每条边，
+  # **路径吞吐 = 路径上所有边里最小的那个**。把上限写在接收面上会把整条路径压死 ——
+  # 实测教训：究极插在电源面、机器面没插 → 被压到基础档 8192 W →
+  # 下界合金只带得动 2 组并行（2×3200=6400 ✔ / 3×3200=9600 ✘）。
   #
   # 各档上限（照 Lapis-Cable 的尺子：1 个下界合金锭 = 8192 W）：
-  #   裸管/基础 8192 W  → 铜熔炉(约 178 W) 可以，下界合金(19200 W) 带不动
+  #   裸管/基础 8192 W  → 铜熔炉(约 178 W) 可以，满速下界合金(19200 W) 带不动
   #   强化     16384 W
   #   高级     32768 W  → 满速下界合金够用
   #   究极     73728 W
   #
   # ⚠️ Rebar 的 ElectricConsumerNode **没有能量缓冲**：每 tick 必须给满 requiredPower，
-  # 给不满机器就**完全不工作**（不是"变慢"）。所以任何低于机器需求的上限都等于把机器关掉。
-  # 遇到"电在掉、机器不干活"，先看界面里的「当前升级 / 本面上限」那两行。
+  # 给不满机器就**完全不工作**（不是"变慢"）。所以抽取面的档位不够时，
+  # 表现是"电在掉、机器不干活" —— 界面里会显示「本面升级 / 本面上限」。
   # 想彻底不限流就设成 false（像 Lapis-Cable 那样）。
   #
-  # Per-tier throughput limiting. Default true. This is the ONLY place a tier matters
-  # electrically. WARNING: Rebar consumers have NO energy buffer — a cap below a machine's
-  # per-tick draw stops it from working entirely, not "slower". Set false for unlimited.
+  # Per-tier throughput limiting, applied ONLY on "extract" faces (mirrors Pipez's
+  # pullEnergy: the rate belongs to the extracting side). Default true.
+  # WARNING: Rebar consumers have NO energy buffer — a cap below a machine's per-tick
+  # draw stops it from working entirely, not "slower". Set false for unlimited.
   tier-power-limit: true
 
   # 整体倍率：所有档位的容量都乘它（仅在 tier-power-limit 为 true 时有意义）。

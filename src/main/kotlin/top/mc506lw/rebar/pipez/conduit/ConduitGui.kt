@@ -481,16 +481,23 @@ object ConduitGui {
         }
         lore += Component.text("· 潜行 + 扳手右键：快速切换这一面的模式", NamedTextColor.GRAY)
         if (conduit.acceptsUpgrade()) {
-            val tier = conduit.upgradeTierOrNull(face)
+            val own = conduit.upgradeTierOrNull(face)
             lore += Component.text(
-                "当前升级：${tier?.let(::tierName) ?: "未安装"}",
-                if (tier == null) NamedTextColor.RED else NamedTextColor.GRAY
+                "本面升级：${own?.let(::tierName) ?: "未安装"}",
+                if (own == null) NamedTextColor.RED else NamedTextColor.GRAY
             )
-            if (tier != null && PipezConfig.tierPowerLimit) {
-                lore += Component.text(
-                    "本面上限：${UnitFormat.WATTS.format(PipezConfig.capacity(tier))}",
-                    NamedTextColor.GRAY
-                )
+            // ⚠️ 档位**只在抽取面上有电学意义** —— 对标 Pipez 的 `pullEnergy`：
+            // 速率是"正在抽取的那一面"的升级，接收面不参与那次搬运。
+            if (!conduit.faceMode(face).directional) {
+                lore += Component.text("  此面不限流；速率由【抽取面】决定", NamedTextColor.DARK_GRAY)
+            } else if (!PipezConfig.tierPowerLimit) {
+                lore += Component.text("  限流已在 config 里关闭（不限流）", NamedTextColor.DARK_GRAY)
+            } else {
+                // ⚠️ `UnitFormat.WATTS.format(...)` 返回的是 `UnitFormat.Formatted`（ComponentLike），
+                // **不能**塞进字符串模板 —— 那样会调它的 `toString()`，打出 `...Formatted@52be6103`。
+                // 必须 `.build()` 成 Component 再拼。
+                lore += Component.text("本面上限：", NamedTextColor.GRAY)
+                    .append(UnitFormat.WATTS.format(PipezConfig.capacity(conduit.tierOf(face))).build())
             }
         }
         meta.lore(lore)
