@@ -1,0 +1,99 @@
+# ==========================================================================
+# Lapis-Pipez 配置 / Configuration
+# ==========================================================================
+
+conduit:
+  # ⚠️ 是否启用"档位限流"（把档位容量写进 Edge.powerLimit = 每 tick 过流上限）。
+  #
+  # 默认 false = **不限流**，和隔壁 Lapis-Cable 一样。这是唯一安全的默认值：
+  # Rebar 的 ElectricConsumerNode **没有能量缓冲**，它每 tick 报一个 requiredPower，
+  # 网络必须当 tick 给满，否则 isPowered=false、机器**完全不工作**（不是"变慢"）。
+  # 所以上限一旦低于机器需求，就等于把机器关掉 —— 实测：1024 能带动铜熔炉（约 44 W），
+  # 却把下界合金熔炉（4800~19200 W）直接卡死。
+  #
+  # 想要 Pipez 式的限流再打开它，并用下面的 capacity-multiplier 调大小。
+  # Enable per-tier throughput limiting (Edge.powerLimit). Default false = unlimited,
+  # matching Lapis-Cable. Rebar consumers have NO energy buffer, so a cap below a
+  # machine's per-tick draw silently stops it from working entirely.
+  tier-power-limit: false
+
+  # 整体倍率：所有档位的容量都乘它（仅在 tier-power-limit 为 true 时有意义）。
+  # Global multiplier applied to every tier's capacity (only used when limiting is on).
+  capacity-multiplier: 1.0
+
+  # 批处理 flush 间隔（tick）。1 = 每 tick 处理一次邻接变化。
+  # 调大可以进一步削峰，代价是管道连接有延迟。
+  # Flush interval in ticks. 1 = every tick.
+  flush-interval-ticks: 1
+
+# 档位容量**不在配置里**，写死在 ConduitTier.kt：
+#   basic 8192 / improved 16384 / advanced 32768 / ultimate 73728 瓦特
+# 数值和 Lapis-Cable 统一（= 电缆"下界合金"那一列的规格 1x/2x/4x/9x，基础 8192）。
+# 究极档 73728 足以带动满速下界合金熔炉（6 槽 × 3200 W = 19200 W）。
+# 原因：配置文件生成一次就不再更新，一旦某版把旧的低值写进来，
+# 插件升级后仍会被旧配置覆盖 → "改了代码却没生效"。
+# 要整体放大/缩小请用上面的 conduit.capacity-multiplier。
+#
+# Tier capacities are HARD-CODED in ConduitTier.kt on purpose: a generated config.yml
+# is never rewritten, so an old low value would silently override every future update.
+# Use conduit.capacity-multiplier to scale them all.
+#
+# ⚠️ 这个上限是**每 tick 的过流上限**。Rebar 的 consumer 没有能量缓冲，每 tick 必须
+# 给满 requiredPower，给不满就完全不工作 —— 所以调小 multiplier 会卡死大功率机器。
+# This limit is a PER-TICK throughput cap. Rebar consumers have no buffer, so lowering
+# the multiplier can silently stop high-draw machines from working.
+
+render:
+  # 管道造型 = 黑色长方体管身 + 两条垂直方向的彩条（横截面上是"＋"）+ 每段一圈细彩箍。
+  # 全部是普通 ItemDisplay，**不需要资源包**。
+  #
+  # ⚠️ 管身 / 彩条的颜色**按管道类型固定**，不在这里配：
+  #   能量管道 → 红色彩条   流体管道 → 蓝色彩条
+  # 想让服主改色，改 PipeType.kt 里的 stripeMaterial 即可（颜色是"这根管走什么"的身份，
+  # 放进配置容易配坏）。
+  #
+  # Pipe look = black box body + two perpendicular stripes (a "+" in cross-section)
+  # + one thin band per segment. Plain ItemDisplays; no resource pack needed.
+  #
+  # Stripe colours are fixed per pipe type (energy = red, fluid = blue) in PipeType.kt.
+
+  body-thickness: 0.32      # 管身粗细（格）
+  stripe-thickness: 0.11    # 彩条粗细，约管身的 1/3
+  stripe-protrusion: 0.03   # 彩条比管身表面凸出多少（太小会看不出、也容易抢面）
+  stripe-end-overhang: 0.03 # 彩条在尽头多伸出去多少（也用来避免端面共面 → Z-fighting）
+  # 彩条在接头那一端的**额外**余量。基础量固定为「正交臂含彩条的整体半宽」
+  # = (body-thickness + 2 × stripe-protrusion) / 2 ≈ 0.19，彩条头正好停在对方
+  # 彩条的外轮廓上。这个值只是保险余量：调大 → 头伸得更深（也更凸出）；
+  # 调 0 → 刚好停在对方轮廓（默认，贴合原版 Pipez 的拐角观感）。
+  # Extra margin a stripe reaches past the joint. Base = stripeFullWidth/2 ≈ 0.19.
+  stripe-into-joint: 0.0
+  band-thickness: 0.34      # 彩箍粗细。只比管身粗一点点；太粗会像多出来的一对横臂
+  band-length: 0.08         # 彩箍沿管轴的长度（要短，才像箍不像板）
+
+  # 拐弯 / 接头中心补的那个方块（把两根正交的臂在中心连起来，不露缝）。
+  # ⚠️ 默认跟随管身粗细（填 <= 0 即跟随）。原版 Pipez 的拐角管身**不变粗**，
+  # 填大了会像"拐弯处鼓了个疙瘩"。内凹角本来就该留着。
+  # Center cube for bends/junctions. Values <= 0 follow body-thickness (recommended).
+  junction-cube-size: 0
+
+  # 0 通（还没接上）的造型：黑色正方体 + 三个方向的黄箍
+  isolated-cube-size: 0.35  # 正方体边长（和 Pylon cargo duct 的 0.3495 同量级）
+
+cargo:
+  # 物品端点每 tick 最多搬运几个物品。
+  # Max items moved per tick by an item endpoint.
+  items-per-tick: 8
+
+bridge:
+  # ⚠️ Rebar 把流体网络（FluidManager）和机器虚拟库存（VirtualInventoryRebarBlock）
+  # 在 Kotlin 层标成了 internal，公开 API 用不了，所以这两块只能走反射。
+  # 设为 false 就完全没有流体、且物品端点只认原版容器，但也不再依赖任何内部 API。
+  #
+  # WARNING: this uses Rebar's NON-PUBLIC API (Kotlin `internal`).
+  # Set to false to drop all reflection and internal-API usage.
+  use-reflection: true
+
+fluid:
+  # 流体网络的传输速率（毫桶/秒）。
+  # Fluid throughput, in millibuckets per second.
+  per-second: 1000.0

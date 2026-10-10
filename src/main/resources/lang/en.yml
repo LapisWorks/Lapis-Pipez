@@ -1,0 +1,55 @@
+addon: "Lapis-Pipez"
+
+guide:
+  page:
+    pipez: "<gray>Lapis-Pipez"
+
+item:
+  conduit:
+    name: "<gray>Conduit (Legacy)"
+    lore: |-
+      <gray>Legacy all-in-one conduit, now split
+      <gray>into energy and fluid pipes
+  pipe_energy:
+    name: "<gray>Energy Pipe"
+    lore: |-
+      <red>■ <gray>Carries power; stripe is <red>red
+      <gray>Links to neighbouring <red>energy pipes<gray> and machine power ports
+      <gray>Throughput: <white>%max-power%
+      <gray>Use an upgrade module to raise it
+  pipe_fluid:
+    name: "<gray>Fluid Pipe"
+    lore: |-
+      <#85b7eb>■ <gray>Carries fluids; stripe is <#85b7eb>blue
+      <gray>Links to neighbouring <#85b7eb>fluid pipes<gray> and machine fluid ports
+      <gray>Throughput: <white>%fluid-rate% <gray>mB/s
+  item_endpoint:
+    name: "<gray>Item Endpoint"
+    lore: |-
+      <gray>Wrench: cycle none / extract / insert
+      <gray>Sneak + right-click an item to filter
+  wrench:
+    name: "<gray>Conduit Wrench"
+    lore: |-
+      <gray>Right-click a conduit's face
+      <gray>to enable / disable that side
+  upgrade_basic:
+    name: "<white>Basic Upgrade"
+    lore: |-
+      <gray>Throughput: <white>%max-power%
+      <gray>Right-click a conduit to install
+  upgrade_improved:
+    name: "<#9fe1cb>Improved Upgrade"
+    lore: |-
+      <gray>Throughput: <white>%max-power%
+      <gray>Right-click a conduit to install
+  upgrade_advanced:
+    name: "<#85b7eb>Advanced Upgrade"
+    lore: |-
+      <gray>Throughput: <white>%max-power%
+      <gray>Right-click a conduit to install
+  upgrade_ultimate:
+    name: "<#c0dd97>Ultimate Upgrade"
+    lore: |-
+      <gray>Throughput: <white>%max-power%
+      <gray>Right-click a conduit to install

@@ -1,0 +1,29 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Gradle
+.gradle/
+
+# Build
+build/
+bin/
+out/
+libs/
+
+# Kotlin
+.kotlin/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# 参考用的源码副本（rebar / pylon 等），不要提交
+参考/
+
+# 本地 AI 工具目录
+.workbuddy-ai/

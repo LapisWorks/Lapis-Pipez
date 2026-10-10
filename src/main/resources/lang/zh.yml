@@ -1,0 +1,54 @@
+addon: "Lapis-Pipez"
+
+guide:
+  page:
+    pipez: "<gray>Lapis-Pipez"
+
+item:
+  conduit:
+    name: "<gray>管道（旧）"
+    lore: |-
+      <gray>旧版全能管，已拆分为能量 / 流体两类
+  pipe_energy:
+    name: "<gray>能量管道"
+    lore: |-
+      <red>■ <gray>传输电力，彩条为<red>红色
+      <gray>自动连接相邻的<red>能量管道<gray>与机器电口
+      <gray>传输上限：<white>%max-power%
+      <gray>用升级模块可以提升上限
+  pipe_fluid:
+    name: "<gray>流体管道"
+    lore: |-
+      <#85b7eb>■ <gray>传输流体，彩条为<#85b7eb>蓝色
+      <gray>自动连接相邻的<#85b7eb>流体管道<gray>与机器流体口
+      <gray>传输速率：<white>%fluid-rate% <gray>mB/s
+  item_endpoint:
+    name: "<gray>物品端点"
+    lore: |-
+      <gray>扳手：循环切换 无 / 抽取 / 接收
+      <gray>潜行 + 右键物品可设置白名单
+  wrench:
+    name: "<gray>管道扳手"
+    lore: |-
+      <gray>右键管道的某个面
+      <gray>可开启 / 关闭那个方向的连接
+  upgrade_basic:
+    name: "<white>基础升级"
+    lore: |-
+      <gray>传输上限：<white>%max-power%
+      <gray>右键管段安装
+  upgrade_improved:
+    name: "<#9fe1cb>强化升级"
+    lore: |-
+      <gray>传输上限：<white>%max-power%
+      <gray>右键管段安装
+  upgrade_advanced:
+    name: "<#85b7eb>高级升级"
+    lore: |-
+      <gray>传输上限：<white>%max-power%
+      <gray>右键管段安装
+  upgrade_ultimate:
+    name: "<#c0dd97>究极升级"
+    lore: |-
+      <gray>传输上限：<white>%max-power%
+      <gray>右键管段安装
