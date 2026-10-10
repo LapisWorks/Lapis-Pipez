@@ -130,14 +130,25 @@ object ConduitGui {
         val filterItems = ArrayList<Item>()
         val refreshFilters: () -> Unit = { filterItems.forEach(Item::notifyWindows) }
 
+        /**
+         * 让**整个界面重绘一遍**。
+         *
+         * ⚠️ 只在"某个操作会改变**别的格子**的内容"时才需要。已知的几处：
+         * - 改升级模块 → 帮助条目的「本面升级 / 本面上限」、以及三个模式按钮的锁定状态；
+         * - 改本面模式（普通/抽取/断路）→ 帮助条目里"此面限不限流"那段；
+         * - 改过滤模式 → 过滤器格子能不能点。
+         * 之前这几处都只重绘了自己那一个格子，于是"状态变了但字还是旧的"（用户实测）。
+         */
+        val refreshAll: () -> Unit = { gui.notifyWindows() }
+
         // 这一面的连接模式（普通 / 抽取 / 断路）—— 和扳手是同一个开关，
         // 放在界面上是为了给玩家一个**可靠、看得见**的断开途径。
-        gui.setItem(MODE, modeButton(conduit, face))
+        gui.setItem(MODE, modeButton(conduit, face, refreshAll))
 
         // 红石 / 分配 / 过滤模式：三个循环按钮
         gui.setItem(REDSTONE, redstoneButton(conduit, face))
         gui.setItem(DISTRIBUTION, distributionButton(conduit, face))
-        gui.setItem(FILTER_MODE, filterModeButton(conduit, face))
+        gui.setItem(FILTER_MODE, filterModeButton(conduit, face, refreshAll))
 
         // 过滤器列表
         FILTER_CHARS.forEachIndexed { index, ch ->
@@ -171,6 +182,11 @@ object ConduitGui {
                 }
                 // 虚拟库存只是"视图"，真正的存储在管子上（会写 PDC）
                 conduit.setSideUpgrade(face, upgradeSlot.getItem(0))
+                // ⚠️ 档位变了 → **必须让界面重绘**。
+                // 帮助条目（"本面升级 / 本面上限"）和三个模式按钮的**锁定状态**都跟着档位走；
+                // 不重绘的话，玩家把模块拖走之后那行字还写着"究极"、按钮也还是解锁状态
+                // （用户实测："把升级拿出来还是那个挡位"）。
+                gui.notifyWindows()
             }
             gui.setInventory(UPGRADE, upgradeSlot)
         }
@@ -178,7 +194,9 @@ object ConduitGui {
         gui.setItem(ADD, addButton(conduit, face, refreshFilters))
         gui.setItem(REMOVE, removeButton(conduit, face, refreshFilters))
         gui.setItem(CLEAR, clearButton(conduit, face, refreshFilters))
-        gui.setItem(HELP, helpItem(conduit, face))
+        // ⚠️ 用 **Supplier 重载**，让这条每次重绘都重新生成 —— 它要反映"当前档位"，
+        // 而档位会被升级槽改掉（`Item.simple(...)` 只渲染一次，会一直是旧内容）。
+        gui.setItem(HELP) { helpItem(conduit, face) }
 
         Window.builder()
             .setViewer(player)
@@ -196,7 +214,7 @@ object ConduitGui {
      * 和扳手（潜行 + 右键）改的是**同一个值**，只是这里看得见、点得到。
      * 循环顺序 = [FaceMode.TERMINAL_CYCLE]（普通 → 抽取 → 断路）。
      */
-    private fun modeButton(conduit: ConduitBlock, face: BlockFace): Item =
+    private fun modeButton(conduit: ConduitBlock, face: BlockFace, refreshAll: () -> Unit): Item =
         Item.builder()
             .setItemProvider { _ ->
                 val mode = conduit.faceMode(face)
@@ -222,6 +240,8 @@ object ConduitGui {
                 val index = cycle.indexOf(conduit.faceMode(face)).coerceAtLeast(0)
                 val step = if (click.clickType.isRightClick) cycle.size - 1 else 1
                 conduit.setFaceMode(face, cycle[(index + step) % cycle.size])
+                // 本面模式变了 → 帮助条目里"此面限不限流"那段要跟着变
+                refreshAll()
             }
             .build()
 
@@ -283,7 +303,7 @@ object ConduitGui {
             }
             .build()
 
-    private fun filterModeButton(conduit: ConduitBlock, face: BlockFace): Item =
+    private fun filterModeButton(conduit: ConduitBlock, face: BlockFace, refreshAll: () -> Unit): Item =
         Item.builder()
             .setItemProvider { _ ->
                 // 第一关：能量管没有过滤器
@@ -315,6 +335,8 @@ object ConduitGui {
                 if (!conduit.canChangeFilter(face)) return@addClickHandler
                 val mode = conduit.filterMode(face)
                 conduit.setFilterMode(face, if (click.clickType.isRightClick) mode.previous else mode.next)
+                // 过滤模式变了 → 过滤器格子的"能不能点"跟着变
+                refreshAll()
             }
             .build()
 
