@@ -13,7 +13,8 @@ Lapis-Pipez —— 方块式多介质管道附属（Kotlin / Paper 26.2 / Java 2
 
 - 内容命名空间 `pipez`（`PipezKeys.NAMESPACE` 与 `PipezAddon.getKey()` 必须一致）
 - 包名 `top.mc506lw.rebar.pipez`
-- 目录约定：`conduit/` 放管段与网络层，`items/` 放物品，`listeners/` 放事件接入，
+- 目录约定：`conduit/` 放管段与网络层，`cargo/` 放物品搬运（容器抽象 + 中央任务），
+  `items/` 放物品，`listeners/` 放事件接入，
   顶层放 `PipezAddon` / `PipezKeys` / `PipezItems` / `PipezBlocks` / `PipezPages` / `PipezConfig`
 - 入口 `PipezAddon.onEnable` 里按顺序初始化 `PipezItems` → `PipezBlocks` → `PipezPages`，
   再注册 `ConduitLinkListener`，最后起 flush 定时任务
@@ -35,6 +36,23 @@ Lapis-Pipez —— 方块式多介质管道附属（Kotlin / Paper 26.2 / Java 2
    千万不要 `disconnectAll()` 再全连 —— 每次 connect/disconnect 都会触发 Rebar 的
    网络合并（O(网络规模)），那样批处理就白做了。
 
+## 物品搬运（`cargo/`）—— 没有端点方块
+
+和 Pipez 一致：**哪根物品管的哪个面贴着容器、且被扳手点成"抽取"，那一面就是一个端点。**
+
+- `PipeType.Category.ITEM` 决定"只沿物品管走"；`ConduitBlock.machineLinkState` 里
+  物品分支**直接查裸方块是不是容器**（原版箱子不是 `RebarBlock`，`rebarAt` 对它返回 null）。
+- `cargo/CargoEndpoint.kt`：容器抽象，抹平原版 `InventoryHolder` 与 InvUI `VirtualInventory`。
+  `isContainer` / `of` **必须先查 `isChunkLoaded`**（`Block.getState()` 在未加载区块会抛）。
+- `cargo/ItemTransfer.kt`：**中央任务**，只登记"抽取面贴容器"的管格；
+  每个端点每 tick 只跑**一次** BFS（不要写成"每个槽跑一次"）。
+  由 `ConduitNetwork.flush()` 之后调用（见 `PipezAddon` 的定时任务）。
+- 路由 `ConduitGraph.forEachReachable(category = ITEM, ...)` —— 能量 / 流体管一律死路。
+- **升级模块对物品管生效**：基础解锁红石、强化解锁分配、高级解锁过滤
+  （对齐 Pipez 的能力矩阵，由 `ConduitTierTest` 锁死）。流体管**没有**升级槽。
+- 容器放置 / 破坏要触发重算 → `ConduitLinkListener` 里加了**原版** `BlockPlaceEvent` /
+  `BlockBreakEvent`（Rebar 事件覆盖不到原版方块）。
+
 ## ⚠️ 哪些 Rebar API 是 internal（本项目最重要的经验）
 
 **字节码是 public 不等于 Kotlin 能用。** Rebar 大量 API 在 Kotlin 层标了 `internal`，
@@ -46,9 +64,12 @@ Lapis-Pipez —— 方块式多介质管道附属（Kotlin / Paper 26.2 / Java 2
 |---|---|---|
 | `fluid.FluidManager` | 公开 API 无法组建流体网络（建得了点，连不了点） | `bridge/FluidBridge.kt` 反射 |
 | `fluid.placement.FluidPipePlacementService` | 同上，且流体管道没有可视化 | 无对策（接受无渲染） |
-| `logistics.LogisticGroup` / `logistics.slot.LogisticSlot` | 取不到物流槽 | 不用，改走原版 `InventoryHolder` |
-| `block.interfaces.LogisticRebarBlock.logisticGroups` | 同上 | 同上 |
 | `block.interfaces.VirtualInventoryRebarBlock.getVirtualInventories` | 取不到 Rebar 机器的虚拟库存 | `bridge/VirtualInventoryBridge.kt` 反射 |
+
+> ⚠️ **勘误**：`logistics.LogisticGroup` / `logistics.slot.LogisticSlot` 一度被认为取不到，
+> 但在 `0.44.4-26.2` 里**其实都是公开的**（只有 `CargoRoutes` 是 `@ApiStatus.Internal`）。
+> 本项目仍**不使用**它们，因为语义不匹配（那是给货运路由按 input/output 分组设计的），
+> 而不是可见性问题 —— 物品搬运直接走原版 `InventoryHolder` / `VirtualInventory`。
 
 **可以正常用的（public）**：`ElectricRebarBlock` / `SimpleElectricRebarBlock`、`ElectricNode`、
 `ElectricConnectorNode`、`ElectricNetwork.Edge`、`TickingRebarBlock`、`BlockStorage`、
@@ -92,7 +113,7 @@ Lapis-Pipez —— 方块式多介质管道附属（Kotlin / Paper 26.2 / Java 2
 
 | 目的 | 命令 |
 |---|---|
-| 编译 + 单测 + 打包 | `./gradlew build` → `build/libs/Lapis-Pipez-0.1.3.jar` |
+| 编译 + 单测 + 打包 | `./gradlew build` → `build/libs/Lapis-Pipez-<版本>.jar` |
 | 只编译（快） | `./gradlew compileKotlin` |
 | 只跑测试 | `./gradlew test` |
 

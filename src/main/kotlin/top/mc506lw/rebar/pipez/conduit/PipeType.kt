@@ -11,14 +11,14 @@ package top.mc506lw.rebar.pipez.conduit
  * 各自独立、各传各的，就必须先把"类型"这个概念从方块里拆出来。
  *
  * 拆出来之后，[PipeType] 就是这个概念的唯一真相来源：
- * - **颜色/材质**：能量管红、流体管蓝（颜色一眼分得清走的是什么）；
+ * - **颜色/材质**：能量管红、流体管蓝、物品管橙（颜色一眼分得清走的是什么）；
  * - **网络类别**（[category]）：决定这根管接哪一套网络逻辑；
- * - **物品/方块键**：每种类型一个内容键，玩家背包里也是两种独立物品。
+ * - **物品/方块键**：每种类型一个内容键，玩家背包里也是几种独立物品。
  *
  * ## 不互通是硬规则
  *
  * [ConduitBlock.connectsTo] 只在**同类型**之间成立 —— 能量管和流体管贴在一起也不会连。
- * 这是有意的：两种网络的语义完全不同（一个限流瓦特、一个限流速 mB/s），
+ * 这是有意的：几种网络的语义完全不同（一个限流瓦特、一个限流速 mB/s、一个搬物品），
  * 混在一根管里既没法配也没法调。想要"同时走电和流体"就并排铺两根。
  */
 enum class PipeType(
@@ -49,18 +49,25 @@ enum class PipeType(
         category = Category.FLUID,
         bodyMaterial = org.bukkit.Material.BLACK_CONCRETE,
         stripeMaterial = org.bukkit.Material.LIGHT_BLUE_CONCRETE
+    ),
+
+    /** 物品管道：橙色彩条。 */
+    ITEM(
+        id = "item",
+        category = Category.ITEM,
+        bodyMaterial = org.bukkit.Material.BLACK_CONCRETE,
+        stripeMaterial = org.bukkit.Material.ORANGE_CONCRETE
     );
 
     /**
      * 网络类别。决定一个管段要接哪套网络逻辑：
      * - [ENERGY] → 建电力节点、写边限流（走 Rebar 的 `ElectricNetwork`）
      * - [FLUID] → 建流体点、连流体段（走 [top.mc506lw.rebar.pipez.fluid.ConduitFluid]）
-     * - [ITEM] → 物品搬运。**目前还没有对应的 [PipeType] 条目**，
-     *   这个类别先存在，是为了让 [top.mc506lw.rebar.pipez.conduit.ConduitGraph] 能表达
-     *   "物品端点只走物品管"这个语义 —— 而现在物品管还不存在，
-     *   所以物品端点**暂不沿任何管段路由**（见 `ItemEndpoint`）。
+     * - [ITEM] → 物品搬运（见 [PipeType.ITEM]）。管段本身**不 tick**，
+     *   实际搬运挂在 [ConduitBlock] 的中央物品任务上：哪根管贴着容器，
+     *   那一面就是一个端点。
      *
-     * 以后加"物品 / 气体"也只需要在这里加一项。
+     * 以后加"气体"也只需要在这里加一项。
      */
     enum class Category {
         ENERGY,

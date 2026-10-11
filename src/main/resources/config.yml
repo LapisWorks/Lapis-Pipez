@@ -110,14 +110,14 @@ render:
   isolated-cube-size: 0.35  # 正方体边长（和 Pylon cargo duct 的 0.3495 同量级）
 
 cargo:
-  # 物品端点每 tick 最多搬运几个物品。
-  # Max items moved per tick by an item endpoint.
+  # 物品管道每个抽取端点每 tick 最多搬运几个物品。
+  # Max items moved per tick by each item extraction endpoint.
   items-per-tick: 8
 
 bridge:
   # ⚠️ Rebar 把流体网络（FluidManager）和机器虚拟库存（VirtualInventoryRebarBlock）
   # 在 Kotlin 层标成了 internal，公开 API 用不了，所以这两块只能走反射。
-  # 设为 false 就完全没有流体、且物品端点只认原版容器，但也不再依赖任何内部 API。
+  # 设为 false 就完全没有流体、且物品管道只认原版容器，但也不再依赖任何内部 API。
   #
   # WARNING: this uses Rebar's NON-PUBLIC API (Kotlin `internal`).
   # Set to false to drop all reflection and internal-API usage.

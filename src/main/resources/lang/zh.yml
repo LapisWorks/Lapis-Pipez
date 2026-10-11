@@ -22,11 +22,12 @@ item:
       <#85b7eb>■ <gray>传输流体，彩条为<#85b7eb>蓝色
       <gray>自动连接相邻的<#85b7eb>流体管道<gray>与机器流体口
       <gray>传输速率：<white>%fluid-rate% <gray>mB/s
-  item_endpoint:
-    name: "<gray>物品端点"
+  pipe_item:
+    name: "<gray>物品管道"
     lore: |-
-      <gray>扳手：循环切换 无 / 抽取 / 接收
-      <gray>潜行 + 右键物品可设置白名单
+      <#e8a33d>■ <gray>传输物品，彩条为<#e8a33d>橙色
+      <gray>自动连接相邻的<#e8a33d>物品管道<gray>与容器
+      <gray>贴着容器的管段即为端点，会自动搬运
   wrench:
     name: "<gray>管道扳手"
     lore: |-

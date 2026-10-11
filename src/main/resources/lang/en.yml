@@ -23,11 +23,12 @@ item:
       <#85b7eb>■ <gray>Carries fluids; stripe is <#85b7eb>blue
       <gray>Links to neighbouring <#85b7eb>fluid pipes<gray> and machine fluid ports
       <gray>Throughput: <white>%fluid-rate% <gray>mB/s
-  item_endpoint:
-    name: "<gray>Item Endpoint"
+  pipe_item:
+    name: "<gray>Item Pipe"
     lore: |-
-      <gray>Wrench: cycle none / extract / insert
-      <gray>Sneak + right-click an item to filter
+      <#e8a33d>■ <gray>Carries items; stripe is <#e8a33d>orange
+      <gray>Links to neighbouring <#e8a33d>item pipes<gray> and containers
+      <gray>A pipe touching a container is an endpoint; it moves items automatically
   wrench:
     name: "<gray>Conduit Wrench"
     lore: |-

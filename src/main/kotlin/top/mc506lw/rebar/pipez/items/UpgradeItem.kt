@@ -31,12 +31,18 @@ import top.mc506lw.rebar.pipez.conduit.rebarAt
  * 两种方式都是**把物品放进槽**，槽里原有的模块会**还给玩家**（不是销毁）。
  * 拔掉模块 = 降回基础档 —— 这是 Pipez 的行为，玩家能预期。
  *
+ * ## 哪些管有槽
+ *
+ * - **能量管**：有 —— 档位决定瓦特上限。
+ * - **物品管**：有 —— 档位是界面功能的钥匙（红石 / 分配 / 过滤）。
+ * - **流体管**：**没有**（对齐 Pipez 的 `FluidPipeType.hasUpgrade() == false`）。
+ *
  * ## 插不进去的情况
  *
- * - **流体管**：Pipez 的 `FluidPipeType.hasUpgrade()` 返回 `false`，
- *   流体管压根没有升级槽，所以插不进去（模块原样留在手里）。
- * - **档位没变高**：Pipez 的槽允许放同级或更低档（只是没提升），
- *   这里也允许 —— 反正模块是"存"在槽里，不是"消费"。
+ * - **流体管**：没有升级槽，模块原样留在手里。
+ * - **非抽取面**：升级只挂在"抽取端"上（和配置界面的打开条件一致）。
+ * - **档位没变高**：允许放同级或更低档（只是没提升）——
+ *   反正模块是"存"在槽里，不是"消费"。
  */
 class UpgradeItem(stack: ItemStack) : RebarItem(stack), InteractRebarItemHandler {
 
@@ -55,7 +61,7 @@ class UpgradeItem(stack: ItemStack) : RebarItem(stack), InteractRebarItemHandler
         val clicked = event.clickedBlock ?: return
         val conduit = rebarAt(clicked) as? ConduitBlock ?: return
 
-        // 只有能量管有升级槽（对齐 Pipez 的 hasUpgrade()）
+        // 流体管没有升级槽（对齐 Pipez 的 FluidPipeType.hasUpgrade() == false）
         if (!conduit.acceptsUpgrade()) return
 
         val face = event.blockFace

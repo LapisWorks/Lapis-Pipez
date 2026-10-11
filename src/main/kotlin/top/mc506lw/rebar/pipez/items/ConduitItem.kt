@@ -14,9 +14,9 @@ import top.mc506lw.rebar.pipez.conduit.PipeType
  *
  * ## 每种管道类型一个物品
  *
- * 能量管和流体管是两样独立的东西（键 `pipe_energy` / `pipe_fluid`）。
- * 物品的名字 / lore 走 lang 里各自的条目（`item.pipe_energy.*` / `item.pipe_fluid.*`），
- * 这里把它自己是什么类型、能跑多少，作为占位符交给 lang。
+ * 能量管、流体管、物品管是三样独立的东西（键 `pipe_energy` / `pipe_fluid` / `pipe_item`）。
+ * 物品的名字 / lore 走 lang 里各自的条目，这里把它自己是什么类型、能跑多少，
+ * 作为占位符交给 lang。
  *
  * 管段没有档位之分（档位是"装上去"的，见 [UpgradeItem]），所以物品只有一种外观。
  */
@@ -34,7 +34,8 @@ class ConduitItem(stack: ItemStack) : RebarItem(stack) {
         PipeType.Category.FLUID -> listOf(
             RebarArgument.of("fluid-rate", PipezConfig.fluidPerSecond.toLong().toString())
         )
-        // 物品管还没做（只有类别，没有条目），暂时不会有物品走到这里
+        // 物品管：没有"速率上限"这个概念（速率由每个抽取端点独立给），
+        // lore 里也不引用占位符，所以给空表。
         PipeType.Category.ITEM -> emptyList()
     }
 }

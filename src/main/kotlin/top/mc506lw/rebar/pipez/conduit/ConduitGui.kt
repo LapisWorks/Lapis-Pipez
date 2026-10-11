@@ -540,6 +540,7 @@ object ConduitGui {
     private fun pipeName(type: PipeType): String = when (type) {
         PipeType.ENERGY -> "能量管道"
         PipeType.FLUID -> "流体管道"
+        PipeType.ITEM -> "物品管道"
     }
 
     private fun faceName(face: BlockFace): String = when (face) {

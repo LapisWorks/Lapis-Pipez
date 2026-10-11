@@ -29,20 +29,32 @@
 
 | 内容 | 键 | 说明 |
 |---|---|---|
-| 管道 | `pipez:conduit` | 放置后自动连接相邻管道与机器端口 |
-| 管道扳手 | `pipez:wrench` | 右键管道的某个面，开关那个方向的连接 |
-| 物品端点 | `pipez:item_endpoint` | 扳手切换 无 / 抽取 / 接收；潜行 + 右键物品设白名单 |
-| 升级模块 ×4 | `pipez:upgrade_basic` … `ultimate` | 右键管段提档：1024 / 4096 / 16384 / 65536 W |
+| 能量管道 | `pipez:pipe_energy` | 红色彩条；自动连相邻能量管与机器电口，上限 8192 W（可升级） |
+| 流体管道 | `pipez:pipe_fluid` | 蓝色彩条；自动连相邻流体管与机器流体口，速率见 `config.yml` |
+| 物品管道 | `pipez:pipe_item` | 橙色彩条；自动连相邻物品管与**容器**，贴着容器的面即为端点 |
+| 管道扳手 | `pipez:wrench` | 潜行 + 右键某个面：普通 → 抽取 → 断路 循环 |
+| 升级模块 ×4 | `pipez:upgrade_basic` … `ultimate` | 右键管段的抽取面插模块：8192 / 16384 / 32768 / 73728 W，并解锁界面功能 |
 
 ## 用法
 
-1. `/rb give @s pipez:conduit`
-2. 一根一根摆下去，相邻的会自动连起来；拐弯、三通、十字都不用额外方块
-3. 贴着机器的端口放，管道会自动接到那个端口上
-4. 用 `pipez:wrench` 右键某个面，可以单独断开那个方向
-5. 传输不够就用 `pipez:upgrade_*` 右键管段提档
-6. 要搬物品：在箱子旁边放 `pipez:item_endpoint`，扳手切成"抽取"，
-   在另一边的箱子旁再放一个切成"接收"，中间用管道连起来
+### 布线（能量 / 流体 / 物品通用）
+
+1. `/rb give @s pipez:pipe_energy`（或 `pipe_fluid` / `pipe_item`）
+2. 一根一根摆下去，相邻的**同类型**管道会自动连起来；拐弯、三通、十字都不用额外方块
+3. 贴着机器的端口（或容器）放，管道会自动接到那一面
+4. 用 `pipez:wrench` **潜行 + 右键**某个面，在 `普通 → 抽取 → 断路` 之间循环
+
+### 搬物品（没有端点方块，靠"抽取面"）
+
+物品管**不 tick**，搬运由一个中央任务驱动，只跑少数"抽取端点"：
+
+1. 从箱子 A 拉一根物品管到箱子 B（中间随意拐弯 / 分叉）
+2. 潜行 + 扳手右键**贴箱子 A 的那一面** → 切成 **抽取**
+3. 箱子 B 那边**保持默认（普通）**即可 —— 它会自动接收
+4. 想过滤：拿着升级模块右键那个抽取面插上（**基础=红石 / 强化=分配 / 高级=过滤**），
+   再普通右键那个抽取面打开配置界面
+
+> 一根管可以一个面抽、另一个面送；多个抽取端点会给管网叠加吞吐。
 
 ## 配置
 
@@ -51,20 +63,21 @@
 ```yaml
 conduit:
   capacity-multiplier: 1.0    # 所有档位容量都乘它
+  tier-power-limit: true      # 是否把档位容量写成边的过流上限（见下方警告）
   flush-interval-ticks: 1     # 批处理间隔，调大可以削峰但有延迟
-tiers:
-  basic: 1024.0               # 各档位基础容量（瓦特）
-  improved: 4096.0
-  advanced: 16384.0
-  ultimate: 65536.0
 cargo:
-  items-per-tick: 8           # 物品端点每 tick 搬运量
+  items-per-tick: 8           # 每个抽取端点每 tick 搬运量
 fluid:
-  use-reflection: true        # ⚠️ 见下
-  per-second: 1000.0
+  per-second: 1000.0          # 流体速率（mB/s）
+bridge:
+  use-reflection: true        # ⚠️ 见下方「关于反射」
 render:
-  shape-models: true          # 形状写进自定义模型数据（需资源包）
+  stripes: true               # 彩条（纯装饰，占每臂实体数的 2/3）
+  bands: true                 # 彩箍（纯装饰，大型管网里数量最多）
 ```
+
+各档容量固定在代码里（`ConduitTier`）：**8192 / 16384 / 32768 / 73728 W** ——
+和 `Lapis-Cable` 的"1 个下界合金锭 = 8192 W"用同一把尺子。
 
 ## ⚠️ 关于反射
 
@@ -77,7 +90,7 @@ render:
 | 功能 | 反射目标 | 不做会怎样 |
 |---|---|---|
 | 流体网络 | `FluidManager` 的 `add`/`connect`/`disconnect` | 完全没有流体 |
-| Rebar 机器库存 | `VirtualInventoryRebarBlock.getVirtualInventories` | 物品端点只认原版容器 |
+| Rebar 机器库存 | `VirtualInventoryRebarBlock.getVirtualInventories` | 物品管道只认原版容器 |
 
 隔离措施：
 
@@ -98,9 +111,9 @@ Rebar 是 0.x，内部 API 随时可能变；**每次升级 Rebar 后都要重�
 | M2.5 | 扳手 + 邻接事件接入 | ✅ |
 | M3 | 档位（4 档）+ 升级模块 | ✅ |
 | M4 | 流体网络 | ⚠️ 已完成，走反射 |
-| M5 | 物品端点 + 路由 + 白名单 | ✅ 原版容器 + Rebar 机器 |
+| M5 | 物品管道 + 相邻容器自动成端 + 中央搬运任务 | ✅ 原版容器 + Rebar 机器 |
 | M6 | 形状渲染（自定义模型数据） | ✅ |
-| M6.5 | 贪心合并渲染 / 万级实测 | ⬜ |
+| M6.5 | 贪心合并渲染 / 万级实测 | ✅ 已做贪心合并，万级实测待补 |
 
 **已知限制**
 
@@ -110,13 +123,13 @@ Rebar 是 0.x，内部 API 随时可能变；**每次升级 Rebar 后都要重�
   造型由**真实 `ItemDisplay` + `LineBuilder` 画线**实现 ——
   **不需要资源包**，看起来就是一根细管。
   （不用 Rebar 的 `BlockTextureEntity`：那条路要资源包，而且被遮挡时亮度为 0、会渲染成黑块。）
-- 目前**每段线一个展示实体**，还没有做 Pylon 那样的"整条直线合并成一个实体"（M6.5）。
-- 物品端点靠"相邻方块自动识别"找容器，没有指定面的配置。
+- 物品搬运的**接收容器按"整箱"收**，不会优先塞进"已有同类物品"的槽（原版漏斗那种）。
+- 物品管**不支持堆叠升级 / 每槽定量**（Pipez 的 Stack Upgrade 未实现）。
 
 ## 构建
 
 ```bash
-./gradlew build      # → build/libs/Lapis-Pipez-0.1.3.jar
+./gradlew build      # → build/libs/Lapis-Pipez-<版本>.jar
 ```
 
 前置：MC 26.2（Paper 或其分支）+ Rebar 0.44.4+ + JDK 25。

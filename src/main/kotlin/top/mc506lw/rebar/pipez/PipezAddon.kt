@@ -7,6 +7,7 @@ import org.bukkit.plugin.java.JavaPlugin
 import org.bukkit.scheduler.BukkitTask
 import top.mc506lw.rebar.pipez.bridge.FluidBridge
 import top.mc506lw.rebar.pipez.bridge.VirtualInventoryBridge
+import top.mc506lw.rebar.pipez.cargo.ItemTransfer
 import top.mc506lw.rebar.pipez.conduit.ConduitNetwork
 import top.mc506lw.rebar.pipez.fluid.ConduitFluid
 import top.mc506lw.rebar.pipez.listeners.ConduitLinkListener
@@ -54,9 +55,15 @@ class PipezAddon : JavaPlugin(), RebarAddon {
         // 批处理：所有邻接变化只进队列，这里每个 tick 统一处理一次。
         // 放在 scheduler 上跑（tick 开头）而不是事件回调里跑，是为了把同一 tick 内的
         // 多次改动合并成一次网络重算。
+        //
+        // ⚠️ 顺序：先 flush（刷新端点登记），再搬物品 —— 反过来的话，
+        // 这一 tick 新接上的管子要等下一 tick 才开始搬。
         flushTask = server.scheduler.runTaskTimer(
             this,
-            Runnable { ConduitNetwork.flush() },
+            Runnable {
+                ConduitNetwork.flush()
+                ItemTransfer.tick()
+            },
             1L,
             PipezConfig.flushIntervalTicks
         )
@@ -66,6 +73,7 @@ class PipezAddon : JavaPlugin(), RebarAddon {
         flushTask?.cancel()
         ConduitNetwork.clear()
         ConduitFluid.clear()
+        ItemTransfer.clear()
     }
 
     /**
@@ -90,7 +98,7 @@ class PipezAddon : JavaPlugin(), RebarAddon {
             logger.info("Rebar machine inventories enabled via reflection.")
         } else {
             logger.warning(
-                "Rebar machine inventories unavailable, item endpoints will only accept " +
+                "Rebar machine inventories unavailable, item pipes will only accept " +
                     "vanilla containers: ${VirtualInventoryBridge.failureReason}"
             )
         }

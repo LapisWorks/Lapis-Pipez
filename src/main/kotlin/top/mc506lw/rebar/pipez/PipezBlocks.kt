@@ -8,7 +8,6 @@ import org.bukkit.Material
 import org.bukkit.inventory.ItemStack
 import top.mc506lw.rebar.pipez.conduit.ConduitBlock
 import top.mc506lw.rebar.pipez.conduit.PipeType
-import top.mc506lw.rebar.pipez.endpoints.ItemEndpoint
 import top.mc506lw.rebar.pipez.items.ConduitItem
 
 /**
@@ -44,17 +43,14 @@ object PipezBlocks {
             .build()
 
     /**
-     * 背包外观：能量管用红色混凝土、流体管用浅蓝混凝土 —— 和彩条同色系，
-     * 但因为底块是黑的，这里用深一点的颜色更耐看。
+     * 背包外观：能量管用红色混凝土、流体管用浅蓝混凝土、物品管用橙色混凝土
+     * —— 和彩条同色系，但因为底块是黑的，这里用深一点的颜色更耐看。
      */
     private fun itemModelFor(type: PipeType): Material = when (type) {
         PipeType.ENERGY -> Material.RED_CONCRETE
         PipeType.FLUID -> Material.LIGHT_BLUE_CONCRETE
+        PipeType.ITEM -> Material.ORANGE_CONCRETE
     }
-
-    /** 端点是"设备"，底块保持实体方块，物品材质与之一致即可。 */
-    val ITEM_ENDPOINT_ITEM: ItemStack =
-        ItemStackBuilder.rebar(Material.IRON_BLOCK, PipezKeys.ITEM_ENDPOINT).build()
 
     fun initialize() {
         // 每种类型的管道：注册方块 + 对应的放置物品（键必须相同玩家才能放）
@@ -68,9 +64,6 @@ object PipezBlocks {
         // 加载后 ConduitBlock 会把它迁移成能量管（见 ConduitBlock.pipeType 的推导）。
         RebarBlock.register(PipezKeys.CONDUIT, Material.STRUCTURE_VOID, ConduitBlock::class.java)
         RebarItem.register(ConduitItem::class.java, legacyConduitItem(), PipezKeys.CONDUIT)
-
-        RebarBlock.register(PipezKeys.ITEM_ENDPOINT, Material.IRON_BLOCK, ItemEndpoint::class.java)
-        RebarItem.register(EndpointItem::class.java, ITEM_ENDPOINT_ITEM, PipezKeys.ITEM_ENDPOINT)
     }
 
     /** 旧版管子的物品（只在读取老存档时用得上，保持和 0.1.x 一致）。 */
@@ -79,6 +72,3 @@ object PipezBlocks {
             .set(DataComponentTypes.ITEM_MODEL, Material.GRAY_CONCRETE.key)
             .build()
 }
-
-/** 物品端点对应的物品。 */
-class EndpointItem(stack: ItemStack) : RebarItem(stack)

@@ -87,15 +87,6 @@ object PipezKeys {
      */
     val SIDE_FILTERS = key("side_filters")
 
-    /** 物品端点方块。 */
-    val ITEM_ENDPOINT = key("item_endpoint")
-
-    /** 物品端点的搬运模式序号（只在非 NONE 时写入）。 */
-    val ENDPOINT_MODE = key("endpoint_mode")
-
-    /** 物品端点的白名单（逗号分隔的 Material 名，只在非空时写入）。 */
-    val ENDPOINT_FILTER = key("endpoint_filter")
-
     /** 升级模块，键形如 `upgrade_basic`。 */
     fun upgrade(tier: ConduitTier): NamespacedKey = key(ConduitTier.ITEM_PREFIX + tier.id)
 }

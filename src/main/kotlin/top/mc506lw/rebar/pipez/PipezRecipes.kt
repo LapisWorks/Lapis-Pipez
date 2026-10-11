@@ -30,7 +30,7 @@ import top.mc506lw.rebar.pipez.conduit.PipeType
  * |---|---|---|---|
  * | 能量管道 | 8 铜锭围 1 红石 | **1** | 8 铜锭/根 → 约 1024 W/铜锭 |
  * | 流体管道 | 8 铜锭围 1 玻璃 | **1** | 同上 |
- * | 物品端点 | 8 铁锭围 1 漏斗 | 1 | — |
+ * | 物品管道 | 8 铜锭围 1 漏斗 | **1** | 同上 |
  * | 扳手 | 铜 / 铁 / 铜 竖排 | 1 | — |
  * | 基础升级 | 1 个下界合金锭 | 1 | 8192 W |
  * | 强化升级 | 2 个下界合金锭 | 1 | 16384 W |
@@ -60,7 +60,6 @@ object PipezRecipes {
 
     fun initialize() {
         registerPipes()
-        registerEndpoint()
         registerWrench()
         registerUpgrades()
     }
@@ -98,15 +97,12 @@ object PipezRecipes {
             result = PipezBlocks.conduitItemFor(PipeType.FLUID),
             amount = 1
         )
-    }
-
-    /** 物品端点：8 铁锭围 1 个漏斗。 */
-    private fun registerEndpoint() {
+        // 物品管：8 铜锭围 1 个漏斗（和能量 / 流体管同价，只是中心材料不同）
         ring(
-            key = "item_endpoint",
-            ringMaterial = Material.IRON_INGOT,
+            key = "pipe_item",
+            ringMaterial = Material.COPPER_INGOT,
             center = Material.HOPPER,
-            result = PipezBlocks.ITEM_ENDPOINT_ITEM,
+            result = PipezBlocks.conduitItemFor(PipeType.ITEM),
             amount = 1
         )
     }

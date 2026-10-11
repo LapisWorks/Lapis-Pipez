@@ -1,20 +1,31 @@
 package top.mc506lw.rebar.pipez.conduit
 
-import io.github.pylonmc.rebar.block.RebarBlock
 import io.github.pylonmc.rebar.util.position.BlockPosition
 import io.github.pylonmc.rebar.util.position.position
 import org.bukkit.block.Block
 
 /**
- * 沿管段做的图遍历。
+ * 沿管段做的图遍历 —— 物品搬运路由的唯一实现。
  *
- * 物品侧不能用 Rebar 自带的 `CargoRoutes`：它把**任何** `CargoRebarBlock` 当成路由终点
+ * ## 为什么不用 Rebar 自带的 `CargoRoutes`
+ *
+ * Rebar 的货运路由把**任何** `CargoRebarBlock` 当成路由终点
  * （`if (currentBlock is CargoRebarBlock) { endpoint = ...; break }`），
  * 所以一条管段链上的第一根就会被误判成目的地。而管段本来就不该是 `CargoRebarBlock`
- * （那会带来每方块一个协程 ticker，违背"管段不 tick"）。
+ * —— 那会带来每方块一个协程 ticker，违背本附属"管段不 tick"的底线。
  *
- * 所以这里自己走：从起点出发，只沿**同类型**的 [ConduitBlock] 扩散，
- * 遇到第一个满足条件的非管段方块就返回。
+ * 所以这里自己走。
+ *
+ * ## 为什么 `accept` 收 `Block` 而不是 `RebarBlock`
+ *
+ * 物品的"终点"是**容器**，而容器大多数是**原版方块**（箱子 / 桶 / 漏斗），
+ * 根本不是 `RebarBlock`。所以判据必须能拿到裸 [Block]。
+ *
+ * ## 类型隔离
+ *
+ * 只沿**同类型**的 [ConduitBlock] 扩散：物品搬运传 [PipeType.Category.ITEM]，
+ * 能量管 / 流体管一律当死路 —— 这就是用户要的
+ * "能量管不和物品 / 流体管道自动连接"。
  */
 object ConduitGraph {
 
@@ -22,25 +33,25 @@ object ConduitGraph {
     private const val MAX_VISITED = 4096
 
     /**
-     * 从 [start] 出发做 BFS，返回第一个满足 [accept] 的方块。
+     * 从 [start] 的六个邻居出发做 BFS，把**所有**满足 [accept] 的非管段方块交给
+     * [consumer]，然后返回走访过的方块数。
      *
-     * 会尊重扳手禁用的方向（禁用的面不扩散）。
+     * 为什么是"交给 consumer"而不是"返回 List"：
+     * 调用方（物品搬运）要在遍历中顺带算出"这个容器是被哪个管段的哪个面贴着的"，
+     * 那需要知道**是从哪个方向走进来的**。用回调把控制权交回调用方，最省事。
      *
-     * ## ⚠️ 类型隔离：只沿 [category] 的管扩散
+     * [category] 传 `null` 表示"任何 [ConduitBlock] 都走"（只给兼容逻辑用）。
      *
-     * [category] 为 null 表示"任何 [ConduitBlock] 都走"（旧行为，只给兼容逻辑用）。
-     * 传具体类别时，**只沿那一类的管扩散** —— 这就是用户要的
-     * "能量管不和物品 / 流体管道自动连接"：物品端点只会顺着**物品管**走，
-     * 而物品管目前还不存在，所以物品端点**暂时不会**顺着能量管 / 流体管乱跑。
-     *
-     * 等做"物品管道"里程碑时，`ItemEndpoint` 传 `PipeType.Category.ITEM` 即可
-     * —— 那时候物品管才会被纳入，能量管 / 流体管依旧被排除在外。
+     * 会尊重断路：被扳手禁用的面不扩散（[ConduitBlock.isDisabled]）。
+     * **不会**顺带判断红石 —— 那是 [ConduitBlock.connectsTo] 的职责，
+     * 调用方拿到候选后再自行用它过滤（见 `ItemTransfer.attachedNormalFace`）。
      */
-    fun findFirst(
+    fun forEachReachable(
         start: Block,
         category: PipeType.Category? = null,
-        accept: (RebarBlock) -> Boolean
-    ): RebarBlock? {
+        accept: (Block) -> Boolean,
+        consumer: (Block) -> Unit
+    ): Int {
         val visited = HashSet<BlockPosition>()
         val queue = ArrayDeque<Block>()
         for (face in CARDINAL_FACES) queue.addLast(start.getRelative(face))
@@ -59,10 +70,10 @@ object ConduitGraph {
                     if (rebar.isDisabled(face)) continue
                     queue.addLast(block.getRelative(face))
                 }
-            } else if (rebar != null && accept(rebar)) {
-                return rebar
+            } else if (accept(block)) {
+                consumer(block)
             }
         }
-        return null
+        return count
     }
 }

@@ -412,9 +412,9 @@ Cannot access 'object FluidManager : Any': it is internal in file.
 | M2.5 | 扳手（按面禁用）+ 邻接事件接入 | ✅ 已完成 |
 | M3 | 档位（4 档）+ 升级模块 | ✅ 已完成 |
 | M4 | 流体网络（决策 C） | ⚠️ 已完成，但**走反射**（公开 API 不可行，见 §14） |
-| M5 | 物品端点 + 路由 + 白名单过滤 | ✅ 已完成 |
+| M5 | 物品管道 + 相邻容器自动成端 + 中央搬运任务 | ✅ 已完成 |
 | M6 | 形状渲染（自定义模型数据） | ✅ 已完成 |
-| M6.5 | 贪心合并渲染 / 万级实测 / 自管节点优化 | ⬜ 待做 |
+| M6.5 | 贪心合并渲染 / 万级实测 / 自管节点优化 | ⬜ 待做（贪心合并已做，实测待补） |
 
 **物品侧的设计取舍**
 
@@ -422,6 +422,53 @@ Cannot access 'object FluidManager : Any': it is internal in file.
 （`if (currentBlock is CargoRebarBlock) { endpoint = ...; break }`），
 所以管段链上的第一根会被误判成目的地。而管段也不该实现 `CargoRebarBlock` ——
 那个接口的伴生对象会给**每个方块**起一个协程 ticker，直接违背"管段不 tick"。
+
+### 15.1 M5 定稿：没有端点方块，端点 = "抽取面"
+
+最初的 `ItemEndpoint` 方块（`pipez:item_endpoint`）是**死代码** ——
+`PipeType` 里压根没有 `ITEM` 条目，所以它调用
+`ConduitGraph.findFirst(block, Category.ITEM)` 永远返回 null，**一件物品都搬不动**。
+本轮把它整个删掉，换成和 Pipez 一致的模型：
+
+> **没有端点方块。哪根物品管的哪个面贴着容器、且被扳手点成"抽取"，那一面就是一个 (抽取) 端点。**
+
+落地方式：
+
+| 部分 | 位置 | 职责 |
+|---|---|---|
+| `PipeType.ITEM` | `conduit/PipeType.kt` | 物品管的身份（橙色彩条），独立于能量 / 流体 |
+| 容器识别 | `cargo/CargoEndpoint.kt` | 原版 `InventoryHolder` + Rebar 机器虚拟库存，抹平两种读写 API |
+| 端点登记 + 搬运 | `cargo/ItemTransfer.kt` | 只登记"抽取面贴容器"的管格；每 tick 只遍历这些端点 |
+| 路由 | `conduit/ConduitGraph.kt` | 沿 `Category.ITEM` 做 BFS，能量 / 流体管一律死路 |
+| 邻接刷新 | `listeners/ConduitLinkListener.kt` | 增加**原版**容器放置 / 破坏监听（Rebar 事件覆盖不到原版方块） |
+
+**核心约束仍然是"管段不 tick"**：搬运集中在中央任务里，每个端点每 tick 只跑一次 BFS，
+管段本身一 tick 都不花。这和 Pipez 的"只有抽取管有 block entity"（`HAS_DATA` 属性）
+是同一个思路。
+
+**升级模块对物品管生效**（对齐 Pipez 的能力矩阵）：
+
+| 档位 | 红石 | 分配 | 过滤 |
+|---|---|---|---|
+| Basic | ✅ | ❌ | ❌ |
+| Improved | ✅ | ✅ | ❌ |
+| Advanced | ✅ | ✅ | ✅ |
+| Ultimate | ✅ | ✅ | ✅ |
+
+也就是说：**物品管也得插升级模块才能用分配 / 过滤**，和能量管一致
+（`ConduitTier.canChange*` 已经就是这张表，由 `ConduitTierTest` 锁死）。
+流体管则没有升级槽（对齐 Pipez 的 `FluidPipeType.hasUpgrade() == false`）。
+
+### 15.2 修正 §14.1：`LogisticSlot` / `LogisticGroup` 其实取得到
+
+§14.1 说物流那套"从 Kotlin 侧全都取不到"——**这条后来被证伪了**：
+在 `0.44.4-26.2` 里 `io.github.pylonmc.rebar.logistics.LogisticGroup` 与
+`logistics.slot.LogisticSlot` **都是公开的**，只有 `CargoRoutes` 是 `@ApiStatus.Internal`。
+
+不过 M5 **仍然不使用**它们，原因是语义不匹配而不是可见性：
+`LogisticGroup.getVanillaLogisticSlots` 那套是给"货运路由"设计的（按 input/output 分组），
+而我们需要的是"整箱搬运 + 自己按分配模式排序"，直接走 `InventoryHolder` /
+`VirtualInventory` 更直白。这条仅作澄清，不影响实现。
 
 所以物品路由是自建的：`ConduitGraph.findFirst` 从端点出发沿管段做 BFS，
 只走没被扳手禁用的方向，遇到第一个满足条件的非管段方块就返回。

@@ -35,6 +35,8 @@ import org.bukkit.util.Vector
 import kotlin.math.abs
 import top.mc506lw.rebar.pipez.PipezConfig
 import top.mc506lw.rebar.pipez.PipezKeys
+import top.mc506lw.rebar.pipez.cargo.CargoEndpoint
+import top.mc506lw.rebar.pipez.cargo.ItemTransfer
 import top.mc506lw.rebar.pipez.fluid.ConduitFluid
 import top.mc506lw.rebar.pipez.items.ConduitItem
 import top.mc506lw.rebar.pipez.items.UpgradeItem
@@ -522,6 +524,8 @@ class ConduitBlock :
      */
     override fun onPostBlockBreak(context: BlockBreakContext) {
         ConduitFluid.detach(this)
+        // 物品搬运端点是按"管格"登记的，拆掉时要摘掉自己
+        if (pipeType.category == PipeType.Category.ITEM) ItemTransfer.detach(this)
     }
 
     // ---------------------------------------------------------------- 形状
@@ -548,7 +552,7 @@ class ConduitBlock :
      * 3. 邻居是**机器** → 只有那一面**真有对应端口**才通：
      *    - 能量管：那一面得有 `ElectricPortEntity`（走 [ConduitLinker.portLoadState]）
      *    - 流体管：那一面得有流体口（走 [ConduitFluid] 的 `machinePointAt`）
-     * 4. 邻居是其它东西（`ItemEndpoint`、原版方块、别的附属的机器）→ 不通。
+     * 4. 邻居是其它东西（别的附属的机器、非容器的原版方块）→ 不通。
      *
      * ## 为什么机器这一条要看"端口在不在"
      *
@@ -564,7 +568,10 @@ class ConduitBlock :
         if (isDisabled(face)) return false
         // 红石模式：不满足条件的面**直接不连**（复刻 Pipez 的 shouldWork 把关）
         if (!redstoneAllows(face)) return false
-        val neighbor = rebarAt(block.getRelative(face)) ?: return false
+
+        val target = block.getRelative(face)
+        val neighbor = rebarAt(target)
+
         if (neighbor is ConduitBlock) {
             // ⚠️ 还要看**对面那一面是不是断路** —— 否则断路是"单边"的：
             // 我这面正常、邻居那面断路时，我仍然以为连着，于是管身一路画过去，
@@ -572,8 +579,16 @@ class ConduitBlock :
             // 只查 `isDisabled`（不递归调 connectsTo），所以不会无限递归。
             return neighbor.pipeType == pipeType && !neighbor.isDisabled(face.oppositeFace)
         }
+
+        // ⚠️ **物品管可以直连原版容器**（箱子 / 桶 / 漏斗…）—— 那些根本不是 Rebar 方块，
+        // `rebarAt` 返回 null。物品管的"机器"就是容器，判定交给 [machineLinkState]
+        // （它自己看裸方块）。其余类别（能量 / 流体）对面的普通方块一律不连。
+        val isItem = pipeType.category == PipeType.Category.ITEM
+        if (neighbor == null && !isItem) return false
+
         // ⚠️ 机器侧还要过一道 [MachinePortGuard]：**同一张管网里一台机器只接一个端口**。
         // 否则把机器的输出口和输入口都接进来 = 短接 = 凭空生电（用户实测）。
+        // （非能量管时 MachinePortGuard 直接放行。）
         return machineLinkState(neighbor, face) != LinkState.ABSENT &&
             MachinePortGuard.allows(this, face)
     }
@@ -593,12 +608,16 @@ class ConduitBlock :
     /**
      * 判断 [neighbor] 在 [face] 这一面的连接状态。
      *
-     * 非机器（`ConduitBlock` / `ItemEndpoint` / 普通方块）一律 [LinkState.ABSENT] ——
-     * 这条就是"管道不与物品端点、也不与其它东西自动连接"的实现。
+     * 非机器（`ConduitBlock` / 非容器的普通方块 / 别的附属机器）一律 [LinkState.ABSENT] ——
+     * 这条就是"管道不与不认识的东西自动连接"的实现。
      *
      * 参数用 [Any]? 而不是 `RebarBlock`：`ElectricRebarBlock` / `FluidRebarBlock`
      * 在 Rebar 里是**接口**，Kotlin 侧和 `RebarBlock` 类没有继承关系，
      * 这里只做 `is` 判定，用 `Any?` 最省事（null = 空气，直接 ABSENT）。
+     *
+     * ⚠️ **物品管是例外**：它的"机器"是**容器**，而容器大多数是原版方块 ——
+     * `rebarAt` 对它们返回 null，所以 [neighbor] 对物品管没用。物品管直接看
+     * [block].[getRelative]\([face]\) 那个**裸方块**是不是容器。
      */
     private fun machineLinkState(neighbor: Any?, face: BlockFace): LinkState =
         when (pipeType.category) {
@@ -622,8 +641,23 @@ class ConduitBlock :
                     LinkState.ABSENT
                 }
 
-            // 物品管还没做 → 不存在任何"该连的机器"，一律不连
-            PipeType.Category.ITEM -> LinkState.ABSENT
+            // 物品管：对面只要是个"容器"就连 —— 原版箱子 / 桶 / 漏斗，
+            // 或带虚拟库存的 Rebar 机器都算。**没有专门的端点方块**：
+            // 贴着容器的管段，那一面就自然成了一个端点（用户要的"身边有容器才成端点"）。
+            //
+            // ⚠️ **不能用 `neighbor != null` 当前置条件**：原版容器（箱子等）
+            // 根本不是 Rebar 方块，`rebarAt` 对它们一律返回 null —— 那样写会让
+            // "物品管贴原版箱子"永远连不上（只剩 Rebar 机器能连）。
+            // 所以这里直接查裸方块是不是容器。
+            //
+            // 容器的判定没有"加载中"这个中间态（原版库存随区块同步加载，
+            // 虚拟库存反射拿不到就是拿不到），所以这里只有 PRESENT / ABSENT。
+            PipeType.Category.ITEM ->
+                if (CargoEndpoint.isContainer(block.getRelative(face))) {
+                    LinkState.PRESENT
+                } else {
+                    LinkState.ABSENT
+                }
         }
 
     /** 供邻段查询：本方块在 [face] 方向有没有连接。 */
@@ -1506,12 +1540,18 @@ class ConduitBlock :
         pipeSupportsFilter() && upgradeTierOrNull(face)?.canChangeFilter == true
 
     /**
-     * 本管段**有没有升级槽** —— 只有能量管有（对齐 Pipez 的 `hasUpgrade()`）。
+     * 本管段**有没有升级槽**（对齐 Pipez 的 `hasUpgrade()`）。
      *
-     * 流体管的传输速率由 `config.yml` 的 `fluid.per-second` 统一给，
-     * 没有"档位"可言，所以不给升级槽，免得玩家插了模块却看不到任何效果。
+     * - **能量管**：有。档位决定抽取边的瓦特上限。
+     * - **物品管**：有。档位是**界面功能的钥匙** —— 基础解锁红石、强化解锁分配、
+     *   高级解锁过滤（见 [ConduitTier.canChange*]）。这也正是 Pipez 的做法：
+     *   "Every configuration you change and every filter you add is stored in the upgrade"，
+     *   没插模块就什么都配不了。
+     * - **流体管**：没有。速率由 `config.yml` 的 `fluid.per-second` 统一给
+     *   （Pipez 的 `FluidPipeType.hasUpgrade()` 也返回 false），
+     *   给了升级槽玩家也看不到任何效果。
      */
-    fun acceptsUpgrade(): Boolean = pipeType.category == PipeType.Category.ENERGY
+    fun acceptsUpgrade(): Boolean = pipeType.category != PipeType.Category.FLUID
 
     /** 往某个面加一条过滤（返回是否加成功 —— 重复的不加）。 */
     fun addFilter(face: BlockFace, stack: ItemStack): Boolean {
@@ -1659,8 +1699,8 @@ class ConduitBlock :
         when (pipeType.category) {
             PipeType.Category.ENERGY -> refreshElectric()
             PipeType.Category.FLUID -> refreshFluid()
-            // 物品管还没做，没有网络要刷
-            PipeType.Category.ITEM -> Unit
+            // 物品管不建网络，但要告诉中央搬运任务"本格现在算不算抽取端点"
+            PipeType.Category.ITEM -> ItemTransfer.refresh(this)
         }
 
         // 形状变了就重建显示实体（真实实体，spawn/remove 都不便宜，所以要去重）

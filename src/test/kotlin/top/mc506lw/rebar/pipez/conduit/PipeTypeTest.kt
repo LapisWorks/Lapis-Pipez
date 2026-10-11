@@ -34,18 +34,21 @@ class PipeTypeTest {
     }
 
     @Test
-    fun `energy and fluid are different categories and never share a key`() {
+    fun `every category is represented and all keys are unique`() {
         assertEquals(PipeType.Category.ENERGY, PipeType.ENERGY.category)
         assertEquals(PipeType.Category.FLUID, PipeType.FLUID.category)
+        // 物品管已经落地：物品类别必须有对应条目，否则物品搬运无从路由。
+        assertEquals(PipeType.Category.ITEM, PipeType.ITEM.category)
+
         val ids = PipeType.entries.map { it.id }
         assertEquals(ids.size, ids.toSet().size, "pipe ids must be unique")
-    }
 
-    @Test
-    fun `item category exists but has no pipe type yet`() {
-        // 物品类别先存在（供 ConduitGraph 表达"只走物品管"），
-        // 但现在还没有对应条目 —— 这正是"物品端点暂不沿任何管段路由"的依据。
-        val itemTypes = PipeType.entries.filter { it.category == PipeType.Category.ITEM }
-        assertTrue(itemTypes.isEmpty(), "item pipe not implemented yet")
+        // 三个类别各自至少有一种管道 —— 防止再出现"类别存在但没有条目"的死代码。
+        for (category in PipeType.Category.entries) {
+            assertTrue(
+                PipeType.entries.any { it.category == category },
+                "category $category has no pipe type"
+            )
+        }
     }
 }

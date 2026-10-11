@@ -16,9 +16,8 @@ object PipezPages {
 
     private val pageItems by lazy(LazyThreadSafetyMode.NONE) {
         buildList {
-            // 每种类型的管道各占一个条目（能量管、流体管）
+            // 每种类型的管道各占一个条目（能量管、流体管、物品管）
             PipeType.entries.forEach { add(PipezBlocks.conduitItemFor(it)) }
-            add(PipezBlocks.ITEM_ENDPOINT_ITEM)
             add(PipezItems.WRENCH)
             addAll(PipezItems.UPGRADES.values)
         }
