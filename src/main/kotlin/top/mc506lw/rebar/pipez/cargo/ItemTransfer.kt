@@ -5,10 +5,10 @@ import io.github.pylonmc.rebar.util.position.position
 import org.bukkit.Material
 import org.bukkit.block.BlockFace
 import org.bukkit.inventory.ItemStack
-import top.mc506lw.rebar.pipez.PipezConfig
 import top.mc506lw.rebar.pipez.conduit.CARDINAL_FACES
 import top.mc506lw.rebar.pipez.conduit.ConduitBlock
 import top.mc506lw.rebar.pipez.conduit.ConduitGraph
+import top.mc506lw.rebar.pipez.conduit.ConduitTier
 import top.mc506lw.rebar.pipez.conduit.Distribution
 import top.mc506lw.rebar.pipez.conduit.FaceMode
 import top.mc506lw.rebar.pipez.conduit.FilterMode
@@ -39,16 +39,30 @@ import top.mc506lw.rebar.pipez.conduit.rebarAt
  * 所以"放一根物品管紧贴箱子，再用扳手把那一面点成抽取" = 一个抽取端点，
  * 完全等价于 Pipez 里"箱子 + 抽取升级"。
  *
+ * ## 抽取范围（不是"整箱乱抽"）
+ *
+ * 抽取只从容器的**可抽取槽**取（[CargoEndpoint.extractSlots]）——
+ * 也就是机器的 OUTPUT / BOTH 组。INPUT 组（熔炉进料、燃料、**工厂升级模块**）
+ * 一律不抽（用户实测：之前把铁熔炉的升级槽、待烧炼区都抽走了）。
+ * 接收同理，只往 INPUT / BOTH 组插。
+ *
+ * ## 速度（升级模块**真的**提速）
+ *
+ * 对标 Pipez 的 `ItemPipeType.tick`：
+ * ```java
+ * if (tileEntity.getLevel().getGameTime() % getSpeed(tileEntity, side) != 0) continue;
+ * ```
+ * **速率属于抽取面那一档升级**，与能量侧的 `pullEnergy` 是同一个模型：
+ * - 没插模块 → speed 20 / amount 4
+ * - 基础 → 15 / 8、强化 → 10 / 16、高级 → 5 / 32、究极 → 1 / 64
+ *
+ * （数值逐格照抄 Pipez `ServerConfig` 的默认值，见 [ConduitTier.itemSpeed]。）
+ *
  * ## 路由
  *
  * 沿 [ConduitGraph]（只走 `Category.ITEM` 的管）做一次 BFS，收集**全部**接收容器：
- * 某根物品管的某个 [FaceMode.NORMAL] 面贴着容器，且该容器不是抽取源自己
- * （避免"抽出来又放回去"的无用搬运）。
- *
+ * 某根物品管的某个 [FaceMode.NORMAL] 面贴着容器，且该容器不是抽取源自己。
  * 要**全部**而不是第一个，是因为还得按 [Distribution] 在这些容器之间排序。
- *
- * 分配模式（[Distribution]）与过滤（[FilterMode]）在这里生效 ——
- * 这也是它们**第一次真正投入使用**（能量 / 流体侧还被框架网络占着）。
  */
 object ItemTransfer {
 
@@ -63,6 +77,9 @@ object ItemTransfer {
 
     /** 每个端点的"轮询游标"，给 ROUND_ROBIN 用（记住上次送到哪个接收面）。 */
     private val cursors = HashMap<BlockPosition, Int>()
+
+    /** 全局 tick 计数 —— 用来算"这一 tick 该不该动"（对标 Pipez 的 `level.getGameTime()`）。 */
+    private var tickCounter: Long = 0
 
     private data class Endpoint(val face: BlockFace, val source: CargoEndpoint)
 
@@ -84,7 +101,9 @@ object ItemTransfer {
             if (conduit.faceMode(face) != FaceMode.EXTRACT) continue
             val neighbor = conduit.block.getRelative(face)
             val source = CargoEndpoint.of(neighbor) ?: continue
-            if (source.size <= 0) continue
+            // ⚠️ 必须要**有东西可抽**（OUTPUT / BOTH 组非空）。纯 INPUT 的机器
+            // （比如只有进料口、没产出）不能当抽取源 —— 否则会把它"吃进去的"再抽出来。
+            if (!source.canExtract) continue
             best = Endpoint(face, source)
             break
         }
@@ -102,18 +121,33 @@ object ItemTransfer {
     fun clear() {
         extractors.clear()
         cursors.clear()
+        tickCounter = 0
     }
 
     /** 当前登记了几个抽取端点，供调试观察。 */
     val size: Int get() = extractors.size
 
     /**
-     * 每个 tick 跑一次：让每个抽取端点各搬一次物品。
+     * 每次调度跑一遍：让每个抽取端点按自己的速率搬一次物品。
      *
-     * 单项预算 = [PipezConfig.itemsPerTick]（每个端点独立），
-     * 所以端点越多总吞吐越大 —— 和 Pipez 的"每个抽取升级一个速率"一致。
+     * ## 为什么带 [elapsedTicks] 参数
+     *
+     * 搬运任务挂在 [top.mc506lw.rebar.pipez.conduit.ConduitNetwork] 的批处理调度上，
+     * 那个调度的周期是用户可配的 `conduit.flush-interval-ticks`（默认 1）。
+     *
+     * ⚠️ 之前这里写 `tickCounter++`（每次调用 +1），一旦玩家把 flush 间隔调成 4，
+     * `tickCounter` 就是"每 4 个真实 tick 才 +1" —— 于是"每 N tick 搬一次"实际变成
+     * **每 4N tick**，档位越高越离谱（究极档 1 tick 会被拖成 4 tick）。
+     * 所以让调用方把它知道的那个间隔传进来，累加**真实游戏 tick 数**。
+     *
+     * 对标 Pipez 的 `tileEntity.getLevel().getGameTime() % getSpeed(side)`
+     * —— 那里用的是真实世界时间，这里用等效的累加值。
+     *
+     * 间隔是按抽取面的档位算的：没插模块 → 20 tick / 4 个；
+     * 基础 15/8、强化 10/16、高级 5/32、究极 1/64（见 [ConduitTier]）。
      */
-    fun tick() {
+    fun tick(elapsedTicks: Int = 1) {
+        tickCounter += elapsedTicks.coerceAtLeast(1)
         if (extractors.isEmpty()) return
 
         // 复制一份键集：tick 过程中搬运可能触发容器变化（理论上不会改登记表，
@@ -130,30 +164,38 @@ object ItemTransfer {
                 extractors.remove(pos)
                 continue
             }
-            transfer(conduit, endpoint)
+
+            // ⚠️ 速率属于**抽取面**（对标 Pipez 的 pullEnergy）：这一档决定
+            // "每几 tick 搬一次"和"一次搬几个"。没插模块 → 20 / 4（慢但能搬）。
+            val tier = conduit.upgradeTierOrNull(endpoint.face)
+            val speed = tier?.itemSpeed ?: ConduitTier.NO_UPGRADE_ITEM_SPEED
+            if (tickCounter % speed != 0L) continue
+
+            val amount = tier?.itemAmount ?: ConduitTier.NO_UPGRADE_ITEM_AMOUNT
+            transfer(conduit, endpoint, amount)
         }
     }
 
     // ---------------------------------------------------------------- 单次搬运
 
-    private fun transfer(conduit: ConduitBlock, endpoint: Endpoint) {
-        val sourceSlots = endpoint.source.slots()
+    private fun transfer(conduit: ConduitBlock, endpoint: Endpoint, budgetStart: Int) {
+        val sourceSlots = endpoint.source.extractSlots()
         if (sourceSlots.isEmpty()) return
 
-        // ⚠️ BFS 每个端点每 tick **只跑一次**（不管源容器有多少槽）——
+        // ⚠️ BFS 每个端点每次搬运**只跑一次**（不管源容器有多少槽）——
         // 最初写成"每个槽各跑一遍"，一个大箱子 27 个槽就是 27 次 BFS，
         // 端点一多直接拖垮 tick。
         val targets = resolveTargets(conduit, endpoint)
         if (targets.isEmpty()) return
 
-        // ⚠️ 排序也**每个端点每 tick 只做一次**：ROUND_ROBIN 的游标是在
+        // ⚠️ 排序也**每个端点每次搬运只做一次**：ROUND_ROBIN 的游标是在
         // [orderTargets] 里前进的，如果放进下面的槽循环里，27 个槽会让游标转 27 圈，
         // "轮流分配"就退化成随机了。
         val ordered = orderTargets(conduit, targets)
 
         // 找出这次要搬哪些物品（受本面过滤器约束）
         val face = endpoint.face
-        var budget = PipezConfig.itemsPerTick
+        var budget = budgetStart
 
         for (sourceSlot in sourceSlots) {
             if (budget <= 0) break
@@ -173,7 +215,7 @@ object ItemTransfer {
      * 会把 6 个容器各装 10 个，而不是死卡在第一个装不下的容器上。
      *
      * 接收容器的**顺序**由调用方（[transfer]）用 [orderTargets] 算好传进来 ——
-     * 这样 ROUND_ROBIN 的游标每个端点每 tick 只前进一次。
+     * 这样 ROUND_ROBIN 的游标每个端点每次搬运只前进一次。
      */
     private fun pushToTargets(
         stack: ItemStack,
@@ -186,7 +228,9 @@ object ItemTransfer {
 
         for (target in ordered) {
             if (remainingBudget <= 0 || leftInSource <= 0) break
-            for (targetSlot in target.slots()) {
+            // ⚠️ 只往"能插"的槽插（INPUT / BOTH 组）—— 机器的 OUTPUT 组
+            // （比如熔炉成品槽）不该被管道塞东西进去。
+            for (targetSlot in target.insertSlots()) {
                 if (remainingBudget <= 0 || leftInSource <= 0) break
 
                 // 目标槽里现有多少还在源栈里 —— 用当前个数算（每搬一次源就少一点）
@@ -242,7 +286,9 @@ object ItemTransfer {
                 if (!attachedConduit.isConnectedOn(toward)) return@forEachReachable
 
                 val target = CargoEndpoint.of(block) ?: return@forEachReachable
-                if (target.size <= 0) return@forEachReachable
+                // ⚠️ 必须要**能插**（INPUT / BOTH 组非空）。纯 OUTPUT 的容器
+                // （只吐不吃的机器）不能当接收端。
+                if (!target.canInsert) return@forEachReachable
                 result += target
             }
         )

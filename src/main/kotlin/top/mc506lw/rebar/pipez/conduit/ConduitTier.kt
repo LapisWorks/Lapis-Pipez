@@ -22,7 +22,21 @@ enum class ConduitTier(
     /** 能不能改**分配模式**。对标 `Upgrade.canChangeDistributionMode`。 */
     val canChangeDistribution: Boolean,
     /** 能不能改**过滤模式 / 过滤器列表**。对标 `Upgrade.canChangeFilter`。 */
-    val canChangeFilter: Boolean
+    val canChangeFilter: Boolean,
+    /**
+     * **物品**搬运间隔：每 N tick 搬一次。1 = 每 tick。
+     *
+     * 对标 Pipez `ServerConfig.itemPipeSpeed*`（`item_pipe.speed.*`）。
+     * ⚠️ 这是 [ConduitTier.NO_UPGRADE] 之外**唯一会随档位变化的物品传输参数之一**
+     * （另一个是 [itemAmount]）—— 升级模块对物品管道**真的提速**，不只是解锁界面。
+     */
+    val itemSpeed: Int,
+    /**
+     * **物品**每次搬运的个数。
+     *
+     * 对标 Pipez `ServerConfig.itemPipeAmount*`（`item_pipe.amount.*`）。
+     */
+    val itemAmount: Int
 ) {
     /**
      * 每档的**过流上限**（瓦特）—— 只有在 `conduit.tier-power-limit: true` 时才会写进
@@ -50,17 +64,21 @@ enum class ConduitTier(
      *
      * 这样两个附属的"能带多大功率"是同一把尺子，玩家不用在两套数值之间换算。
      */
-    //                                                          红石   分配   过滤
+    //                                                          红石   分配   过滤   物品速度/个数
     // 容量与 `Lapis-Cable` **统一**：照它的"下界合金"那一列、取它的**规格**档位
     // 1x / 2x / 4x / 9x（下界合金基础 8192 W）⇒ 8192 / 16384 / 32768 / 73728。
     //
     // ⚠️ 不取 16x（131072）：那一步是 ×4 的跳变，相对上一档膨胀太快。
     // 取 9x 之后每档 ×2，曲线平滑；而且 **73728 已经远超"满速下界合金熔炉"需要的
     // 19200 W**（6 槽 × 3200 W），究极档带得动它还有 3.8 倍余量。
-    BASIC("basic", 8_192.0, true, false, false),
-    IMPROVED("improved", 16_384.0, true, true, false),
-    ADVANCED("advanced", 32_768.0, true, true, true),
-    ULTIMATE("ultimate", 73_728.0, true, true, true);
+    //
+    // 物品速度/个数**逐格照抄 Pipez 的 ServerConfig 默认值**（item_pipe.speed.* / amount.*）：
+    //   无升级 20/4, basic 15/8, improved 10/16, advanced 5/32, ultimate 1/64
+    // 这四个是"装了模块真的会变快"的那几个数（见 [ItemTransfer.tick]）。
+    BASIC("basic", 8_192.0, true, false, false, 15, 8),
+    IMPROVED("improved", 16_384.0, true, true, false, 10, 16),
+    ADVANCED("advanced", 32_768.0, true, true, true, 5, 32),
+    ULTIMATE("ultimate", 73_728.0, true, true, true, 1, 64);
 
     /** 下一档；已经是最高档返回 null。 */
     val next: ConduitTier? get() = entries.getOrNull(ordinal + 1)
@@ -68,6 +86,20 @@ enum class ConduitTier(
     companion object {
         /** 升级物品的键是 `upgrade_<id>`，从键反解档位。 */
         const val ITEM_PREFIX = "upgrade_"
+
+        /**
+         * **没插升级模块**时的物品搬运间隔（tick）。对标 Pipez
+         * `item_pipe.speed.no_upgrade` 的默认值 20。
+         *
+         * ⚠️ 这是 Pipez 的一个重要语义：**不装模块也能搬物品**，只是慢
+         * （20 tick 一次、一次 4 个）。升级模块把速度提上来。
+         * 所以物品管道的"能不能搬"和"搬多快"是两件事 —— 前者不需要升级，
+         * 后者才需要（见 [ItemTransfer.speedFor]）。
+         */
+        const val NO_UPGRADE_ITEM_SPEED = 20
+
+        /** 没插升级模块时每次搬几个。对标 Pipez `item_pipe.amount.no_upgrade` 的 4。 */
+        const val NO_UPGRADE_ITEM_AMOUNT = 4
 
         fun fromItemKey(key: String): ConduitTier? =
             key.removePrefix(ITEM_PREFIX).takeIf { it != key }?.let(::fromId)

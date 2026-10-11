@@ -174,9 +174,18 @@ object PipezConfig {
     val renderBands: Boolean
         get() = config.getBoolean("render.bands", true)
 
-    /** 物品端点每 tick 最多搬运几个物品。 */
-    val itemsPerTick: Int
-        get() = config.getInt("cargo.items-per-tick", 8).coerceAtLeast(1)
+    /**
+     * ⚠️ **物品搬运速度/个数不在这里** —— 它们按**抽取面的档位**查表，
+     * 写死在 [ConduitTier.itemSpeed] / [ConduitTier.itemAmount]（逐格照抄 Pipez
+     * `ServerConfig` 的 `item_pipe.speed.*` 与 `item_pipe.amount.*` 默认值）。
+     *
+     * 原因和档位容量一样：配置文件**生成一次就不再更新**，一旦某版把旧值写进去，
+     * 插件升级后仍会被旧配置覆盖 → "改了代码却没生效"。
+     * 要整体调，请改 [ConduitTier] 里那两个字段。
+     *
+     * （历史：0.1.58 之前这里有个 `cargo.items-per-tick`，是"所有档位一个速度"的
+     * 临时方案 —— 已删除，因为它和"升级模块真的提速"这条 Pipez 规则冲突。）
+     */
 
     /** 是否启用基于反射的功能（流体网络 + Rebar 机器虚拟库存）。 */
     val useReflection: Boolean

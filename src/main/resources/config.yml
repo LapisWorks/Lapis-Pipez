@@ -109,10 +109,10 @@ render:
   # 0 通（还没接上）的造型：黑色正方体 + 三个方向的黄箍
   isolated-cube-size: 0.35  # 正方体边长（和 Pylon cargo duct 的 0.3495 同量级）
 
-cargo:
-  # 物品管道每个抽取端点每 tick 最多搬运几个物品。
-  # Max items moved per tick by each item extraction endpoint.
-  items-per-tick: 8
+# 物品搬运速度 / 个数**不在配置里** —— 按抽取面的档位查表，写死在 ConduitTier.kt
+# 的 itemSpeed / itemAmount（逐格照抄 Pipez 的 item_pipe.speed.* / amount.* 默认值）：
+#   无升级 20 tick/4 个, basic 15/8, improved 10/16, advanced 5/32, ultimate 1/64
+# Item transfer speed/amount are HARD-CODED per tier in ConduitTier.kt for the same reason.
 
 bridge:
   # ⚠️ Rebar 把流体网络（FluidManager）和机器虚拟库存（VirtualInventoryRebarBlock）

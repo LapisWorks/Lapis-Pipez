@@ -103,4 +103,51 @@ class ConduitTierTest {
             if (lower.canChangeFilter) assertTrue(higher.canChangeFilter)
         }
     }
+
+    /**
+     * 物品搬运速度 / 个数必须**逐格对齐 Pipez 的 ServerConfig 默认值**。
+     *
+     * 数值来自 `de.maxhenkel.pipez.ServerConfig`（已核对源码）：
+     * - `item_pipe.speed.no_upgrade` = 20, `item_pipe.amount.no_upgrade` = 4
+     * - `item_pipe.speed.basic` = 15, `amount.basic` = 8
+     * - `item_pipe.speed.improved` = 10, `amount.improved` = 16
+     * - `item_pipe.speed.advanced` = 5, `amount.advanced` = 32
+     * - `item_pipe.speed.ultimate` = 1, `amount.ultimate` = 64
+     *
+     * 用户明确要求"升级模型也能给物品抽取速度升级" —— 这个表就是那份"升级真的提速"的数据。
+     */
+    @Test
+    fun `item speed and amount match Pipez defaults`() {
+        val expected = mapOf(
+            ConduitTier.BASIC to (15 to 8),
+            ConduitTier.IMPROVED to (10 to 16),
+            ConduitTier.ADVANCED to (5 to 32),
+            ConduitTier.ULTIMATE to (1 to 64)
+        )
+        for ((tier, pair) in expected) {
+            assertEquals(pair.first, tier.itemSpeed, "itemSpeed mismatch for $tier")
+            assertEquals(pair.second, tier.itemAmount, "itemAmount mismatch for $tier")
+        }
+        // 无升级那一档（不在枚举里，是常量）
+        assertEquals(20, ConduitTier.NO_UPGRADE_ITEM_SPEED)
+        assertEquals(4, ConduitTier.NO_UPGRADE_ITEM_AMOUNT)
+    }
+
+    /** 档位越高，物品搬运必须**不慢于**低档、一次搬得**不少于**低档。 */
+    @Test
+    fun `item transfer strictly improves with tier`() {
+        // 无升级那一档要排在 BASIC 前面一起比
+        val speed = listOf(ConduitTier.NO_UPGRADE_ITEM_SPEED) + ConduitTier.entries.map { it.itemSpeed }
+        val amount = listOf(ConduitTier.NO_UPGRADE_ITEM_AMOUNT) + ConduitTier.entries.map { it.itemAmount }
+        // speed 是"每 N tick 一次"，所以**越小越快**
+        for (i in 1 until speed.size) {
+            assertTrue(speed[i] <= speed[i - 1], "speed regressed at index $i: $speed")
+        }
+        for (i in 1 until amount.size) {
+            assertTrue(amount[i] >= amount[i - 1], "amount regressed at index $i: $amount")
+        }
+        // 速度/个数都必须 > 0，否则 tick 里 `% speed` 会除零、或根本搬不动
+        assertTrue(speed.all { it > 0 }, "every speed must be positive")
+        assertTrue(amount.all { it > 0 }, "every amount must be positive")
+    }
 }

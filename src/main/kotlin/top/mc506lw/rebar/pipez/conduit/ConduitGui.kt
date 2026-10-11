@@ -51,8 +51,13 @@ import xyz.xenondevs.invui.window.Window
  * ## ⚠️ 哪些"真的生效"、哪些"只存不生效"
  *
  * - **红石模式**：**真的生效**。`ConduitBlock.connectsTo` 会拿 `redstoneAllows` 把关。
- * - **升级槽**：**真的生效**。档位决定能量边的瓦特上限（`applyEdgeLimit`）。
- * - **分配模式 / 过滤模式 / 过滤器列表**：**只存不生效**。
+ * - **升级槽**：**真的生效**。
+ *   - 能量侧：档位决定抽取边的瓦特上限（`applyEdgeLimit`）；
+ *   - 物品侧：档位决定搬运**速度与个数**（`ItemTransfer`，对齐 Pipez 的
+ *     `item_pipe.speed.*` / `amount.*`），同时解锁下面那几个按钮。
+ * - **分配模式 / 过滤器（物品管）**：**真的生效**。物品传输是我们自己写的
+ *   （`ItemTransfer`），排序与过滤都在那条链路上。
+ * - **分配模式 / 过滤器（能量 / 流体）**：**只存不生效**。
  *   能量侧的路由是 Rebar 的 `ElectricNetwork` 自己算的（`findBestPath`），
  *   流体侧走 Rebar 的 `FluidManager`，我们插不进去。等以后自己实现传输时再接。
  */
@@ -89,13 +94,15 @@ object ConduitGui {
      * "要先装升级模块"的说明 —— 对标 Pipez：**没插模块时三个模式按钮全部不可用**
      * （`Upgrade.canChange*(null)` 全是 false）。
      *
-     * 这也是**升级模块真正的用处**：它不是"提升速度"（Rebar 的 consumer 没有缓冲，
-     * 限流只会把机器关掉），而是**解锁界面功能**的钥匙。
+     * ⚠️ 用户实测反馈过"一直说没过滤器，这也不对" —— 意思是：玩家往物品管上找过滤，
+     * 看到的却是"需要升级模块"，很容易理解成"这管道压根没有过滤"。
+     * 所以这里把**物品管到底有没有过滤**写清楚，并明确"装哪个模块能开"。
      */
     private val NEED_UPGRADE_LORE: List<Component> = listOf(
         Component.text("需要升级模块才能更改", NamedTextColor.RED)
             .decoration(TextDecoration.ITALIC, false),
-        Component.text("红石 → 基础；分配 → 强化；过滤 → 高级", NamedTextColor.DARK_GRAY)
+        Component.text("红石 → 基础；分配 → 强化；过滤 → 高级", NamedTextColor.DARK_GRAY),
+        Component.text("把升级模块拖进下方升级槽即可（物品管有过滤）", NamedTextColor.DARK_GRAY)
     )
 
     private val STRUCTURE: Array<String> = buildStructure()
@@ -323,8 +330,11 @@ object ConduitGui {
                         Component.text("左键 / 右键：循环切换", NamedTextColor.GRAY),
                         Component.text("白名单 = 只让列表里的过", NamedTextColor.DARK_GRAY),
                         Component.text("黑名单 = 列表里的都挡住", NamedTextColor.DARK_GRAY),
-                        // 诚实标注：能配置，但过滤效果还没接上（传输在 Rebar 手里）
-                        Component.text("⚠ 过滤效果待接入", NamedTextColor.DARK_GRAY)
+                        // ⚠️ 这里以前写"⚠ 过滤效果待接入" —— 那是**物品传输还没做**时的
+                        // 诚实标注（能量 / 流体的路由在 Rebar 手里，插不进过滤）。
+                        // 现在物品侧自研传输已接上过滤（见 ItemTransfer.passesFilter），
+                        // 还挂着那句话会让玩家以为过滤是坏的。改成如实说明适用范围。
+                        Component.text("✱ 物品管：抽取面按此过滤", NamedTextColor.DARK_GRAY)
                     )
                 )
                 stack.itemMeta = meta
@@ -508,18 +518,39 @@ object ConduitGui {
                 "本面升级：${own?.let(::tierName) ?: "未安装"}",
                 if (own == null) NamedTextColor.RED else NamedTextColor.GRAY
             )
-            // ⚠️ 档位**只在抽取面上有电学意义** —— 对标 Pipez 的 `pullEnergy`：
-            // 速率是"正在抽取的那一面"的升级，接收面不参与那次搬运。
-            if (!conduit.faceMode(face).directional) {
-                lore += Component.text("  此面不限流；速率由【抽取面】决定", NamedTextColor.DARK_GRAY)
-            } else if (!PipezConfig.tierPowerLimit) {
-                lore += Component.text("  限流已在 config 里关闭（不限流）", NamedTextColor.DARK_GRAY)
-            } else {
-                // ⚠️ `UnitFormat.WATTS.format(...)` 返回的是 `UnitFormat.Formatted`（ComponentLike），
-                // **不能**塞进字符串模板 —— 那样会调它的 `toString()`，打出 `...Formatted@52be6103`。
-                // 必须 `.build()` 成 Component 再拼。
-                lore += Component.text("本面上限：", NamedTextColor.GRAY)
-                    .append(UnitFormat.WATTS.format(PipezConfig.capacity(conduit.tierOf(face))).build())
+            when (conduit.pipeType.category) {
+                // 物品侧：档位决定**搬运速度与个数**（对标 Pipez item_pipe.speed.* / amount.*）
+                PipeType.Category.ITEM -> {
+                    val speed = own?.itemSpeed ?: ConduitTier.NO_UPGRADE_ITEM_SPEED
+                    val amount = own?.itemAmount ?: ConduitTier.NO_UPGRADE_ITEM_AMOUNT
+                    // ⚠️ 速率**只在抽取面上生效**（对标 Pipez：速率属于正在抽取的那一面）
+                    if (!conduit.faceMode(face).directional) {
+                        lore += Component.text("  此面不搬运；速度由【抽取面】决定", NamedTextColor.DARK_GRAY)
+                    } else {
+                        lore += Component.text(
+                            "本面速度：每 $speed tick 搬 $amount 个",
+                            NamedTextColor.GRAY
+                        )
+                    }
+                }
+                // 能量侧：档位写成"抽取边"的瓦特上限
+                PipeType.Category.ENERGY -> {
+                    // ⚠️ 档位**只在抽取面上有电学意义** —— 对标 Pipez 的 `pullEnergy`：
+                    // 速率是"正在抽取的那一面"的升级，接收面不参与那次搬运。
+                    if (!conduit.faceMode(face).directional) {
+                        lore += Component.text("  此面不限流；速率由【抽取面】决定", NamedTextColor.DARK_GRAY)
+                    } else if (!PipezConfig.tierPowerLimit) {
+                        lore += Component.text("  限流已在 config 里关闭（不限流）", NamedTextColor.DARK_GRAY)
+                    } else {
+                        // ⚠️ `UnitFormat.WATTS.format(...)` 返回的是 `UnitFormat.Formatted`（ComponentLike），
+                        // **不能**塞进字符串模板 —— 那样会调它的 `toString()`，打出 `...Formatted@52be6103`。
+                        // 必须 `.build()` 成 Component 再拼。
+                        lore += Component.text("本面上限：", NamedTextColor.GRAY)
+                            .append(UnitFormat.WATTS.format(PipezConfig.capacity(conduit.tierOf(face))).build())
+                    }
+                }
+                // 流体管没有升级槽（acceptsUpgrade 为 false），走不到这里
+                PipeType.Category.FLUID -> Unit
             }
         }
         meta.lore(lore)

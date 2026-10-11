@@ -58,14 +58,20 @@ class PipezAddon : JavaPlugin(), RebarAddon {
         //
         // ⚠️ 顺序：先 flush（刷新端点登记），再搬物品 —— 反过来的话，
         // 这一 tick 新接上的管子要等下一 tick 才开始搬。
+        //
+        // ⚠️ 把**真实的调度周期**传给 ItemTransfer：它的"每 N tick 搬一次"是拿
+        // 累加的游戏 tick 数取模算的（对标 Pipez 的 gameTime % speed）。
+        // 如果 flush 间隔被玩家调成 4，而这里还按"每次调用算一 tick"，
+        // 物品搬运会被悄悄拖慢 4 倍（究极档本该每 tick 搬，会变成每 4 tick）。
+        val interval = PipezConfig.flushIntervalTicks
         flushTask = server.scheduler.runTaskTimer(
             this,
             Runnable {
                 ConduitNetwork.flush()
-                ItemTransfer.tick()
+                ItemTransfer.tick(interval.toInt())
             },
             1L,
-            PipezConfig.flushIntervalTicks
+            interval
         )
     }
 
