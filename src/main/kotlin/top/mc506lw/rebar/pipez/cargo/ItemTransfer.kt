@@ -99,6 +99,13 @@ object ItemTransfer {
         for (face in CARDINAL_FACES) {
             // 只有"抽取面"才是源头；断路 / 普通面都不抽
             if (conduit.faceMode(face) != FaceMode.EXTRACT) continue
+            // ⚠️ 这一面还得**真的连通**才能抽 —— 判据和渲染、和搬运完全一致
+            // （`connectsTo`，含 Sided-IO 的面配置）。
+            //
+            // 少了这一句会有一个**反向**的"视觉 ≠ 功能"：玩家把机器那一面设成"空"
+            // 之后，管道**视觉上断开了**（管身缩回、不留胳膊），但这里的源侧登记还在，
+            // 于是那台机器**仍然被当成抽取源**（"看着没连却还在抽"）。
+            if (!conduit.isConnectedOn(face)) continue
             val neighbor = conduit.block.getRelative(face)
             val source = CargoEndpoint.of(neighbor) ?: continue
             // ⚠️ 必须要**有东西可抽**（OUTPUT / BOTH 组非空）。纯 INPUT 的机器

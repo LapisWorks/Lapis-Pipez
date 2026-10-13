@@ -119,4 +119,72 @@ class ConduitShapeTest {
         )
         assertNull(ConduitShape.runAxis(0b111111))
     }
+
+    // ---------------------------------------------------------------- 跨 run 作废方向
+    //
+    // 守的是用户实测的那个 bug：**同样形状、放置顺序不同、渲染不一样**。
+    //
+    // 渲染是"整条直线段由起点格一次画完"。一个格子从"直管"变成"拐角"时，
+    // **以它为端点的那条 run** 的几何（长度 / 末端收口）就变了 —— 但那条 run 的
+    // 起点格可能离得很远。`ConduitNetwork.flush` 靠"把起点拉进批次强制重建"来补，
+    // 而它找起点用的 `runStartOf` 对拐角直接返回 null（`runAxis() ?: return null`）。
+    // 于是穿过拐角的那些 run 的起点永远不被重建 → 旧的显示实体留在世界上。
+    //
+    // `crossRunDirections` 就是"还要沿哪些方向去找 run 起点"的纯逻辑版。
+
+    @Test
+    fun `a straight run block needs no cross-run invalidation`() {
+        // 度数 1 的端点：只有一个方向，runStartOf(本格) 已经覆盖
+        assertEquals(emptyList(), ConduitShape.crossRunDirections(ConduitFace.EAST.bit))
+        // 度数 2 的直管中段：两个方向在同一条轴上，同样已覆盖
+        assertEquals(
+            emptyList(),
+            ConduitShape.crossRunDirections(ConduitFace.EAST.bit or ConduitFace.WEST.bit)
+        )
+        assertEquals(
+            emptyList(),
+            ConduitShape.crossRunDirections(ConduitFace.UP.bit or ConduitFace.DOWN.bit)
+        )
+    }
+
+    @Test
+    fun `a corner must invalidate both of its runs`() {
+        // 拐角：竖管 + 横管两条 run 都以它为端点，两条都要作废
+        val corner = ConduitFace.UP.bit or ConduitFace.NORTH.bit
+        assertEquals(
+            listOf(ConduitFace.UP, ConduitFace.NORTH),
+            ConduitShape.crossRunDirections(corner)
+        )
+    }
+
+    @Test
+    fun `a tee must invalidate all three of its runs`() {
+        val tee = ConduitFace.UP.bit or ConduitFace.DOWN.bit or ConduitFace.EAST.bit
+        assertEquals(
+            listOf(ConduitFace.UP, ConduitFace.DOWN, ConduitFace.EAST),
+            ConduitShape.crossRunDirections(tee)
+        )
+    }
+
+    @Test
+    fun `an isolated block has nothing to invalidate`() {
+        assertEquals(emptyList(), ConduitShape.crossRunDirections(0))
+    }
+
+    /**
+     * 关键不变量：**只要 `runAxis` 为 null（本格不画 run），就必须返回全部连通方向**。
+     * 谁把这条改窄了（比如只返回一部分方向），那条被漏掉的 run 的起点就永远不重建。
+     */
+    @Test
+    fun `every connected face is invalidated whenever this block draws arms instead of a run`() {
+        for (mask in 0..0b111111) {
+            if (ConduitShape.runAxis(mask) != null) continue
+            val connected = ConduitFace.entries.filter { (mask and it.bit) != 0 }
+            assertEquals(
+                connected,
+                ConduitShape.crossRunDirections(mask),
+                "mask=${Integer.toBinaryString(mask)} 是拐角/三通，必须作废全部连通方向"
+            )
+        }
+    }
 }

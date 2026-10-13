@@ -88,16 +88,6 @@ object PipezConfig {
         get() = config.getDouble("render.stripe-protrusion", 0.03)
 
     /**
-     * 彩条在**尽头那一端**多伸出去多少。
-     *
-     * 两个作用：
-     * ① 一眼能看出"这里到端了"（1 通和 2 通就区分开了）；
-     * ② 彩条端面不会和管身端面共面 → 不会 Z-fighting。
-     */
-    val stripeEndOverhang: Double
-        get() = config.getDouble("render.stripe-end-overhang", 0.03).coerceAtLeast(0.0)
-
-    /**
      * 彩条在**接头那一端**伸到"正交臂彩条外轮廓"之上再多留的余量。
      *
      * 基础量是 `stripeFullWidth/2`（正交臂含彩条的整体半宽），这个值只是保险余量。
@@ -106,53 +96,39 @@ object PipezConfig {
     val stripeIntoJoint: Double
         get() = config.getDouble("render.stripe-into-joint", 0.0).coerceIn(0.0, 0.1)
 
-    /**
-     * 拐弯 / 接头中心那个方块（用来填两臂之间的凹角）的边长。
-     *
-     * ⚠️ 默认 `<= 0` 表示**跟随管身粗细**（[bodyThickness]）—— 这是对的：
-     * 原版 Pipez 的拐角管身不会变粗。只有显式配成正数时才放大。
-     */
-    val junctionCubeSize: Float
-        get() {
-            val raw = config.getDouble("render.junction-cube-size", -1.0).toFloat()
-            return if (raw <= 0f) bodyThickness else raw.coerceIn(0.1f, 1.0f)
-        }
+    // ---------------------------------------------------------------- 「心」的造型
 
-    // ---------------------------------------------------------------- 0 通的造型
-
-    /**
-     * 0 通时那个黑色正方体的边长。
-     *
-     * 默认 0.35 —— 和 Pylon `CargoDuct.createNotConnectedDuctDisplay` 的
-     * `TransformBuilder().scale(0.3495)` 一个量级，就是"没接上的管道头"那么大。
-     */
-    val isolatedCubeSize: Float
-        get() = config.getDouble("render.isolated-cube-size", 0.35).toFloat().coerceIn(0.05f, 1.0f)
-
-    /** 0 通时三个黄箍的截面尺寸：比正方体大一点点。 */
-    val ringSize: Float
-        get() = (isolatedCubeSize + stripeProtrusion * 2).toFloat()
+    // ⚠️ 这里**故意没有**「拐弯 / 接头中心方块」这个配置项（旧的 `render.junction-cube-size` 已删）。
+    //
+    // 拐弯 / 接头的中心现在画的是一个**「心」**（`ConduitBlock.spawnHeart`），
+    // 尺寸固定 = [bodyThickness]，和直管每格中心那个心完全一致。
+    //
+    // 为什么删：以前拐角中心是个**光秃秃的方块**（`spawnHub`，没有箍），而直管每格中心
+    // 都画「心」（方块 + 三个箍）。于是"4 格围成一圈"（全是拐角）一个心都看不到，
+    // 而 L 形直管上每格都有心 —— 用户截图："他们完全不一样对吧？这就是问题"。
+    //
+    // ⚠️ 同样**故意没有**「心 的尺寸」配置项。
+    //
+    // 心（= 0 通造型）的粗细**必须等于管身**（[bodyThickness]），箍的宽度必须等于
+    // 管身彩条的全宽（[stripeFullWidth]）—— 这是原版 Pipez 的做法
+    // （`SHAPE_CORE` 和 `SHAPE_EAST` 都是 6/16 方块，core 与臂同粗）。
+    //
+    // 之前这里有过 `isolated-cube-size`（默认 0.35）和 `ringSize`，比管身（0.32）
+    // 粗 0.03 → 每个心都从管身上鼓出一小圈（用户实测："为啥心比臂粗一点啊"）。
+    // 两个尺寸能分别配 = 它们必然会对不上，所以直接删掉，全部由 [bodyThickness] 推导。
 
     /**
      * 彩条的**横截面全宽** = 管身 + 两侧各凸出一点。
      *
      * 因为彩条是"一个方向全宽、另一个方向很薄"的长方体，所以它会在管身的**两个相对侧面**上露出来。
      * 两条互相垂直的彩条 → 四个侧面都有彩条（横截面上是个"＋"）。
+     *
+     * 「心」的三个箍也用这个宽度 —— 保证心的箍和管身的彩条一样粗。
      */
     val stripeFullWidth: Float
         get() = (bodyThickness + stripeProtrusion * 2).toFloat()
 
-    /**
-     * 彩箍粗细。
-     *
-     * 两个约束：
-     * ① 必须**明显不同于** [stripeFullWidth]，否则两个面完全重合，箍看起来是个空框；
-     * ② 必须**只比管身粗一点点**，太粗会像多出来的一对横向臂（用户截图里红框标的就是这个）。
-     */
-    val bandThickness: Float
-        get() = config.getDouble("render.band-thickness", 0.34).toFloat().coerceIn(0.05f, 0.95f)
-
-    /** 彩箍沿管轴方向的长度（要短，才像一圈箍而不是一块板）。 */
+    /** 「心」三个箍沿管轴方向的长度（要短，才像一圈箍而不是一块板）。 */
     val bandLength: Double
         get() = config.getDouble("render.band-length", 0.08).coerceAtLeast(0.01)
 
@@ -167,9 +143,10 @@ object PipezConfig {
         get() = config.getBoolean("render.stripes", true)
 
     /**
-     * 是否画彩箍（每格一圈的细环）。**默认开**。
+     * 是否画「心」的三个箍（每个心一圈）。**默认开**。
      *
-     * ⚠️ 同样是纯装饰，但**每格/每臂一个**，所以在大型管网里是数量最多的一类实体。
+     * ⚠️ 纯装饰 —— 心的**方块**本体永远画（它是管子的实心核心），只有这三个箍受本开关控制。
+     * 但它们是**每格三个**，所以在大型管网里是数量最多的一类实体。
      */
     val renderBands: Boolean
         get() = config.getBoolean("render.bands", true)

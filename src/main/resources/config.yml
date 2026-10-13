@@ -90,24 +90,27 @@ render:
   body-thickness: 0.32      # 管身粗细（格）
   stripe-thickness: 0.11    # 彩条粗细，约管身的 1/3
   stripe-protrusion: 0.03   # 彩条比管身表面凸出多少（太小会看不出、也容易抢面）
-  stripe-end-overhang: 0.03 # 彩条在尽头多伸出去多少（也用来避免端面共面 → Z-fighting）
+  # ⚠️ 旧的 stripe-end-overhang 已删除 —— 它从来没有被任何代码读取（死配置）。
+  # 彩条端面靠 spawnRod 里的 STRIPE_END_POKE 常量错开，不需要配置。
   # 彩条在接头那一端的**额外**余量。基础量固定为「正交臂含彩条的整体半宽」
   # = (body-thickness + 2 × stripe-protrusion) / 2 ≈ 0.19，彩条头正好停在对方
   # 彩条的外轮廓上。这个值只是保险余量：调大 → 头伸得更深（也更凸出）；
   # 调 0 → 刚好停在对方轮廓（默认，贴合原版 Pipez 的拐角观感）。
   # Extra margin a stripe reaches past the joint. Base = stripeFullWidth/2 ≈ 0.19.
   stripe-into-joint: 0.0
-  band-thickness: 0.34      # 彩箍粗细。只比管身粗一点点；太粗会像多出来的一对横臂
-  band-length: 0.08         # 彩箍沿管轴的长度（要短，才像箍不像板）
+  # ⚠️ 彩箍的粗细**不在这里配** —— 「心」的三个箍固定用 `stripe-full-width`
+  # （= body-thickness + 2 × stripe-protrusion），这样它和管身的彩条一样粗。
+  # 旧的 band-thickness 已废弃、可删。
+  band-length: 0.08         # 「心」的箍沿管轴的长度（要短，才像箍不像板）
 
-  # 拐弯 / 接头中心补的那个方块（把两根正交的臂在中心连起来，不露缝）。
-  # ⚠️ 默认跟随管身粗细（填 <= 0 即跟随）。原版 Pipez 的拐角管身**不变粗**，
-  # 填大了会像"拐弯处鼓了个疙瘩"。内凹角本来就该留着。
-  # Center cube for bends/junctions. Values <= 0 follow body-thickness (recommended).
-  junction-cube-size: 0
+  # ⚠️ 拐弯 / 接头中心**不再单独放方块** —— 现在和直管一样，中心画一个「心」
+  # （尺寸 = body-thickness，带三个箍）。旧的 junction-cube-size 已废弃、可删。
 
-  # 0 通（还没接上）的造型：黑色正方体 + 三个方向的黄箍
-  isolated-cube-size: 0.35  # 正方体边长（和 Pylon cargo duct 的 0.3495 同量级）
+  # 「心」（= 0 通那个造型：方块 + 三个方向的箍）的尺寸**不在这里配** ——
+  # 它必须等于管身粗细（body-thickness），箍的宽度必须等于管身彩条的全宽。
+  # 原版 Pipez 的 core 和臂就是同粗的（都是 6/16 方块），所以直管上的 core 看不出来。
+  # 以前这里有过 isolated-cube-size（0.35），比管身粗 0.03，导致每个心都鼓出一小圈。
+  # The heart (= the 0-connection look) is NOT configurable: it must match body-thickness.
 
 # 物品搬运速度 / 个数**不在配置里** —— 按抽取面的档位查表，写死在 ConduitTier.kt
 # 的 itemSpeed / itemAmount（逐格照抄 Pipez 的 item_pipe.speed.* / amount.* 默认值）：

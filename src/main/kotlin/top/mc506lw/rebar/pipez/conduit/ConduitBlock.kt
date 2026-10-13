@@ -33,11 +33,13 @@ import org.bukkit.persistence.PersistentDataContainer
 import org.bukkit.persistence.PersistentDataType
 import org.bukkit.util.Vector
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import top.mc506lw.rebar.pipez.PipezConfig
 import top.mc506lw.rebar.pipez.PipezKeys
 import top.mc506lw.rebar.pipez.cargo.CargoEndpoint
 import top.mc506lw.rebar.pipez.cargo.ItemTransfer
 import top.mc506lw.rebar.pipez.fluid.ConduitFluid
+import top.mc506lw.rebar.pipez.integration.SidedIoBridge
 import top.mc506lw.rebar.pipez.items.ConduitItem
 import top.mc506lw.rebar.pipez.items.UpgradeItem
 
@@ -160,8 +162,15 @@ class ConduitBlock :
         fromKey ?: PipeType.ENERGY
     }
 
-    /** 上次重建显示实体时用的形状掩码。运行期状态，不需要持久化。 */
-    private var lastDisplayMask: Int = -1
+    /**
+     * 上次重建显示实体时用的**几何签名**（见 [geometrySignature]）。运行期状态，不持久化。
+     *
+     * ⚠️ 以前这里存的是"六面形状掩码" —— 那是用户报的"**放置顺序不同 → 渲染不同**"
+     * 的根因。掩码只描述**本格**连了哪几个方向，而 [spawnRun] 把整条直线段交给
+     * **起点格**一次画完，起点格的几何取决于**几格之外**（run 多长、两端是什么）。
+     * 远端一变、起点掩码没变 → 判定"没变、跳过重建" → 旧几何留在世界上。
+     */
+    private var lastDisplaySignature: String = ""
 
     /**
      * 已经登记过"端口加载回调"的 (机器位置, 面)。
@@ -620,7 +629,12 @@ class ConduitBlock :
      * [block].[getRelative]\([face]\) 那个**裸方块**是不是容器。
      */
     private fun machineLinkState(neighbor: Any?, face: BlockFace): LinkState =
-        when (pipeType.category) {
+        // ⚠️ **Sided-IO 优先**：玩家把机器的这一面设成"空"就不连、也不画胳膊。
+        // 传的是**机器那一侧的面**（`face.oppositeFace`）。
+        // 没装 Sided-IO / 那个方块不归它管 → 放行（见 SidedIoBridge）。
+        if (!SidedIoBridge.allows(block.getRelative(face), face.oppositeFace, pipeType.category)) {
+            LinkState.ABSENT
+        } else when (pipeType.category) {
             PipeType.Category.ENERGY ->
                 if (neighbor !is ElectricRebarBlock) {
                     LinkState.ABSENT
@@ -700,14 +714,95 @@ class ConduitBlock :
     override var disableBlockTextureEntity = true
 
     /**
-     * 形状变了才重建显示实体。
+     * **几何签名** —— 只要它变了，就必须 `clearDisplays()` + 重画。
+     *
+     * ## ⚠️ 为什么不能用"六面掩码"当签名（这是本 bug 的根因）
+     *
+     * [spawnRun] 把**整条直线段**交给**起点格**一次画完。所以起点格的几何取决于
+     * **几格之外**的东西 —— 这条 run 有多长、两端各是什么（[FarEnd]）。
+     * 远端一变（比如隔壁那格从"直管中段"变成"拐角"），起点自己的掩码**完全没变**
+     * → 掩码去重判定"没变、跳过重建" → **旧几何留在世界上**（或新几何根本没人画）。
+     * 用户实测的"同样形状、放置顺序不同、渲染不一样"就是它。
+     *
+     * ## 必须覆盖 [rebuildDisplays] 读到的**全部**输入
+     *
+     * - 形状掩码（= 六面 `connectsTo`，含断路 / 红石 / 端口 / 防自短接 / Sided-IO）
+     * - **拐角 / 三通**：每个连通面的 [FarEnd]、对面有没有臂、自身 [faceMode]、抽取黑板
+     * - **直线段**：轴、是不是起点、长度、两端 [FarEnd]、两端断路标志、两端抽取黑板
+     *
+     * ⚠️ **改 [rebuildDisplays] 的分支时，必须同步改这里。** 两者一旦分叉，
+     * "该重画却没重画"这一类 bug 就会重现 —— 而且极难查。
+     */
+    private fun geometrySignature(): String {
+        val mask = shapeMask()
+        if (mask == 0) return "isolated"
+
+        val axis = ConduitShape.runAxis(mask)
+        if (axis == null) {
+            // 拐角 / 三通 / 十字：中心一个「心」+ 每个连通面一条臂
+            return buildString {
+                append("arms")
+                for (f in CARDINAL_FACES) {
+                    if (!connectsTo(f)) continue
+                    append('|').append(f.name)
+                        .append(':').append(farEndOf(this@ConduitBlock, f))
+                        .append(':').append(if (connectsTo(f.oppositeFace)) "opp" else "noopp")
+                        .append(':').append(faceMode(f).name)
+                        .append(':').append(isMachineFacing(f))
+                }
+                // ⚠️ 中心那个「心」的三个箍 + 每条臂的彩条都是**全局开关**控制的：
+                // 关掉之后本格几何变了、但掩码完全没变 → 不写进签名就会"关了却还在"。
+                append(":bands=").append(PipezConfig.renderBands)
+                append(":stripes=").append(PipezConfig.renderStripes)
+            }
+        }
+
+        val dir = canonicalDirectionFor(axis)
+        // 不是起点 → 本格什么都不画（几何由那条 run 的起点负责）
+        if (!isRunStart(dir)) return "midrun"
+
+        // 起点：几何取决于**整条 run**
+        val back = dir.oppositeFace
+        val end = walkRunEnd(dir, axis)
+        val steps = abs(end.block.x - block.x) +
+            abs(end.block.y - block.y) +
+            abs(end.block.z - block.z)
+        return buildString {
+            append("run:").append(axis).append(':').append(steps)
+            // 两端远端分类。新造型下管身 / 心**不再依赖它**（臂固定"心到心"、
+            // 心每格一个），但保留在签名里是**故意的**：签名多写一项只会多重建一次，
+            // 少写一项会让"该重画却没重画"重现。宁可多不可少。
+            .append(':').append(farEndOf(this@ConduitBlock, back))
+            .append(':').append(farEndOf(end, dir))
+            // 两端"管道自己设了断路"—— 它改 connectsTo → 改 [steps]，
+            // 这里再显式记一份，防止将来 walkRunEnd 的判据变化时漏掉。
+            .append(':').append(isDisabled(back))
+            .append(':').append(end.isDisabled(dir))
+            // 两端的抽取黑板 —— 这一项**确实是输入**：faceMode / 有没有端口
+            // 决定画不画板（见 spawnRun 末尾）。
+            .append(':').append(faceMode(back).name)
+            .append(':').append(faceMode(dir).name)
+            .append(':').append(isMachineFacing(back))
+            .append(':').append(end.isMachineFacing(dir))
+            // ⚠️ 彩条是**全局开关**：关掉后所有 run 的彩条都该消失，
+            // 但起点自己的掩码完全没变 → 不写进签名就会"关了开关却还在"。
+            .append(":bands=").append(PipezConfig.renderBands)
+            .append(":stripes=").append(PipezConfig.renderStripes)
+        }
+    }
+
+    /**
+     * 几何签名变了才重建显示实体。
      *
      * 显示实体是**真实实体**（要 spawn / remove），不能每次 flush 都重建 ——
-     * 用 [lastDisplayMask] 记住上次的形状掩码。
+     * 用 [lastDisplaySignature] 去重。
+     *
+     * ⚠️ 走"没变就 return"这条路时**不会** `clearDisplays()`，所以签名必须**完整**：
+     * 漏掉任何一项输入，那一项变化时旧实体就永远留在世界上。
      */
-    private fun refreshDisplaysIfShapeChanged(mask: Int) {
-        if (mask == lastDisplayMask) return
-        lastDisplayMask = mask
+    private fun refreshDisplaysIfSignatureChanged(signature: String) {
+        if (signature == lastDisplaySignature) return
+        lastDisplaySignature = signature
         rebuildDisplays()
     }
 
@@ -752,38 +847,21 @@ class ConduitBlock :
             spawnSegment(spawn, face)
         }
 
-        // 中心补一个方块：两条垂直臂正交相交时，内角天然是 90° 的**凹口**，
-        // 光靠臂本身填不上。方块要够大（> 管身 × √2）才能真正把凹角盖住。
+        // ---------------------------------------------------------------
+        // 中心：**一个「心」** —— 和直管每格中心那个**完全一样**
+        // ---------------------------------------------------------------
         //
-        // ⚠️ 只在"两条臂正交"（拐弯 / 接头）时才补。如果是**端口**（度数 1），
-        // 唯一的臂已经穿满整个方块，中心再放方块只会让管口鼓出一个疙瘩。
-        if (connectionCount() >= 2) spawnHub(spawn)
-    }
-
-    /**
-     * 拐弯 / 接头的中心方块（填凹角）。
-     *
-     * ⚠️ **必须和管身同尺寸**（`bodyThickness`），不能放大。
-     *
-     * 原版 Pipez 的拐角就是"一根管直穿到底，另一根在它侧面靠过来，接缝处套一圈彩箍"——
-     * 拐角处的管子**不会变粗**。之前这里放了一个 0.46 的大方块（> 管身 × √2），
-     * 比管身胖出一大圈，视觉上就像"拐弯处鼓了个疙瘩"，和原版完全不是一个东西。
-     *
-     * 那凹角怎么办？**凹角本来就不该被填满** —— 两根方管正交时内角天然有一个小缺口，
-     * 原版 Pipez 也有，只是彩箍在拐角处套了一圈，把视觉重心带过去了。
-     * 所以这里只要保证中心有实心体把两根臂连起来（不露贯穿的缝）就够了。
-     */
-    private fun spawnHub(spawn: Location) {
-        // 比管身略小一点点（0.002），保证它的侧面不会和相邻臂的侧面共面
-        val size = PipezConfig.bodyThickness - 0.002f
-        val half = size / 2.0
-        // jitter 用第 7 档，避开 6 个方向臂的 0..5 档，防止和臂的侧面共面
-        val jitter = JITTER_STEP * CARDINAL_FACES.size
-        addEntity(
-            "${DISPLAY_PREFIX}hub",
-            box(spawn, Vector(0.0, -half, 0.0), Vector(0.0, half, 0.0),
-                size - jitter, size - jitter, pipeType.bodyMaterial, "hub")
-        )
+        // ⚠️ 这一句是"拐角和直管长得完全不一样"的根治。
+        //
+        // 之前这里放的是 [spawnHub]：一个**光秃秃的方块、没有箍**。而直管
+        // （[spawnRun]）每一格中心都画 [spawnHeart]（方块 + 三个箍）。于是：
+        // - **4 格围成一圈**（全是拐角，一个直管格都没有）→ 一个心都看不到；
+        // - **L 形直管** → 每格都有心。
+        // 两者当然完全不一样（用户截图原话："他们完全不一样对吧？这就是问题"）。
+        //
+        // 现在统一：**每个方块中心一个心**，不管它是直管、拐角还是三通。
+        // 心的方块本体同时也顶替了旧 [spawnHub] 的作用（把正交的两条臂在中心连起来）。
+        spawnHeart(spawn, Vector(0.0, 0.0, 0.0), "center")
     }
 
     /**
@@ -796,15 +874,26 @@ class ConduitBlock :
      * 所以整条轴上所有格子对"谁是起点"的判断天然一致。
      */
     private fun isRunStart(axis: BlockFace): Boolean {
-        // ⚠️ 本格朝反方向**没连着**（断路 / 对面断路 / 空气）→ 本格就是这条 run 的起点。
+        // ⚠️ 判据本体在纯函数 [ConduitShape.isRunStart] 里（有单测）。
         //
-        // 少这一句的后果：反方向那个"想连过来"的邻居仍然让我觉得"我前面还有管子"，
-        // 于是我以为自己不是起点、**什么都不画** —— 断口之后的那一段整段消失。
-        if (!connectsTo(axis.oppositeFace)) return true
-        val prev = rebarAt(block.getRelative(axis.oppositeFace)) as? ConduitBlock ?: return true
-        if (!prev.isConnectedOn(axis)) return true
-        // 邻居必须也属于同一条轴的直线（拐弯 / 三通都不算延续）
-        return prev.runAxis() != canonicalAxis(axis)
+        // 原因：这段逻辑以前长在这里、直接读 Bukkit 邻居 —— 一个纯逻辑（"谁该画这条
+        // run"）被耦合进了"邻居此刻拿不拿得到"。区块边界 / 实体注册时序一变，
+        // "前面还有没有管"的答案就会翻面 → **同一轴上的两个格子同时自认起点**，
+        // 各画一条 run 叠加起来 = 用户报的 `臂心臂心臂`。
+        // 现在只把三个已经算好的纯量喂进去，运行时的"拿不到邻居"退化成显式的
+        // `prevMask = null`（→ 本格是起点），语义明确、可测。
+        val canonical = canonicalDirectionFor(canonicalAxis(axis))
+        if (canonical != axis) return true          // 理论上不会发生，防御
+
+        val back = axis.oppositeFace
+        val prev = rebarAt(block.getRelative(back)) as? ConduitBlock
+        return ConduitShape.isRunStart(
+            mask = shapeMask(),
+            canonical = axis.toConduitFace(),
+            prevMask = prev?.shapeMask(),
+            // 对面说自己朝我这一面（对它的 face = 我的 axis）连着 —— 这才是"它愿意连回来"
+            prevLinksBack = prev?.isConnectedOn(axis) ?: false,
+        )
     }
 
     /**
@@ -822,14 +911,30 @@ class ConduitBlock :
     }
 
     /**
-     * 直线段某一端，管身该从**本格中心**往外伸多远。
+     * [conduit] 在 [face] 那一侧的远端属于哪一类（见 [FarEnd]）。
      *
-     * - 对面是空气 → 伸到表面再加一点（[END_PROTRUSION]），形成可见的"管口"
-     * - 对面是机器 → **齐平停在表面**（`FACE_REACH`），像插头插进去，不穿进机器
-     * - 对面是管段 → 不是"端点"，由调用方另行处理（这里给表面兜底）
+     * ⚠️ **连通判据只有 [connectsTo] 一个** —— 绝不能用"对面有没有方块"来代替。
+     * 那正是"视觉上连着、功能上不连"的来源：机器那一面被设成"空"时，
+     * 对面**仍然是那台机器**，用"非 null"去判就会把管身齐平贴上去。
      */
-    private fun outwardReach(neighbor: io.github.pylonmc.rebar.block.RebarBlock?): Double =
-        if (neighbor == null) FACE_REACH + END_PROTRUSION else FACE_REACH
+    private fun farEndOf(conduit: ConduitBlock, face: BlockFace): FarEnd {
+        val target = conduit.block.getRelative(face)
+        val neighbor = rebarAt(target)
+        val pipe = neighbor as? ConduitBlock
+        return FarEnd.of(
+            linked = conduit.connectsTo(face),
+            samePipe = pipe != null && pipe.pipeType == pipeType,
+            otherPipe = pipe != null && pipe.pipeType != pipeType,
+            // 区块没加载时 `Block.getType()` 不可信，也不该因此把管口缩回去 ——
+            // 按空气处理（画管口），与改动前 `rebarAt` 返回 null 的行为一致，
+            // 免得区块边界上的管段末端突然缩到中心、看起来像断了。
+            air = neighbor == null && (!target.position.isChunkLoaded || target.type.isAir),
+        )
+    }
+
+    /** [FarEnd] 对应的收口距离（几何常量见 companion object）。 */
+    private fun reachFor(kind: FarEnd): Double =
+        kind.reach(FACE_REACH, END_PROTRUSION, OVERLAP)
 
     /**
      * 把某条轴的**规范正方向**转回 Bukkit 的 [BlockFace]：X→EAST、Y→UP、Z→SOUTH。
@@ -845,94 +950,140 @@ class ConduitBlock :
     }
 
     /**
-     * 画一整条直线段（从本方块一直画到这条直线的另一端）。
+     * 从本格沿 [dir] 一路走到**直线段的最后一格**（贪婪合并的行走）。
      *
-     * 这是贪心合并的核心：一整条直线只用一个管身 + 两条彩条，彩箍按格重复。
-     *
-     * 邻居算"延续"的判据：**同一条轴上的直线管**。端点格（度数 1）也要并进来 ——
-     * 否则那一截会缺，或者被它自己用"画臂"的方式重画一遍，两侧各多出一截断臂。
+     * 这段 while 以前是**手抄三份**的（[spawnRun] 一份、`ConduitNetwork.runStartOf`
+     * 一份、签名一份）—— 一旦分叉就会出现"签名说没变、几何却该变"这种最难查的 bug。
+     * 现在收成一个函数，[geometrySignature] 和 [spawnRun] 共用它。
      */
-    private fun spawnRun(spawn: Location, face: BlockFace) {
-        val wanted = canonicalAxis(face)
-        var endBlock: ConduitBlock = this
+    private fun walkRunEnd(dir: BlockFace, axis: Axis): ConduitBlock {
+        var end: ConduitBlock = this
         var guard = 0
         while (guard++ < MAX_RUN) {
-            // ⚠️ **当前格朝 face 那一面必须真的连着**才能继续往前并。
+            // ⚠️ **当前格朝 dir 那一面必须真的连着**才能继续往前并。
             //
             // 少这一句的后果：中间某一格设了断路，整条 run 仍然"跨过"它一路画到底
             // —— 用户设了断路却完全看不出断开（红箭头那一处）。
-            if (!endBlock.connectsTo(face)) break
-            val next = rebarAt(endBlock.block.getRelative(face)) as? ConduitBlock ?: break
-            if (!next.isConnectedOn(face.oppositeFace)) break
-            if (next.runAxis() != wanted) break
-            endBlock = next
+            if (!end.connectsTo(dir)) break
+            val next = rebarAt(end.block.getRelative(dir)) as? ConduitBlock ?: break
+            if (!next.isConnectedOn(dir.oppositeFace)) break
+            if (next.runAxis() != axis) break
+            end = next
         }
+        return end
+    }
 
-        // 线段两端是什么：同类管段 / 机器 / 另一种管 / 空气。
-        // - **同类**管段 → 只重叠一点点（对面那段会覆盖）
-        // - 机器 → 齐平停在方块表面（像插头插进去，不穿模）
-        // - 另一种管 → 也齐平停在表面（不糊在一起）
-        // - 空气 → 比表面多伸一点，形成可见管口
-        //
-        // ⚠️ 不能用"那一侧有没有连接"来判断 —— 接到**机器**时 connectsTo 也是 true，
-        // 结果会把管道多伸出去近一格，在机器里长出一截死路。
-        //
-        // ⚠️ 也不能只写 `is ConduitBlock` —— 那会把**另一种颜色的管**也算成同类，
-        // 于是管道伸进对方一整格。必须同一个类型才算"接上"。
-        val before = rebarAt(block.getRelative(face.oppositeFace))
-        val beyond = rebarAt(endBlock.block.getRelative(face))
-        val beyondConduit = beyond as? ConduitBlock
-        val beyondIsSamePipe = beyondConduit != null && beyondConduit.pipeType == pipeType
-        // 对面那根同类管**愿不愿意连回来** —— 它要是把这一面设了断路，我们就别伸过去。
-        val beyondConnectsBack = beyondConduit != null &&
-            beyondConduit.pipeType == pipeType &&
-            beyondConduit.isConnectedOn(face.oppositeFace)
+    /**
+     * 「心」—— 管段在**每个方块中心**的核心。**造型就是 0 通那个样子**
+     * （黑方块 + 三个方向的箍）。这是用户明确定下的形态：
+     *
+     * > "0 通你知道啥样吧，就是应该是一个臂两端都是 0 通"
+     *
+     * ## 于是整根管是 `心 臂 心`，不是"一根通到底的长条"
+     *
+     * N 格直管 = **N 个心 + (N-1) 段臂**：
+     *
+     * ```
+     *      格0中心         格1中心         格2中心
+     *        [心]=====臂=====[心]=====臂=====[心]
+     * ```
+     *
+     * 整管跨度 = `(N-1) + bodyThickness` ≈ **N-1+0.32 格**，不是完整的 N 格。
+     * 两根相邻管 → `心 臂 心`，跨度 ≈ 1.32 格。
+     *
+     * ## ⚠️ 心的粗细**必须**等于管身（`bodyThickness`）
+     *
+     * 原版 Pipez 的 core 和臂是**同粗的** —— 都是 `Block.box(5,5,5, 11,11,11)`（6/16 方块），
+     * 见 `PipeBlock.java` 的 `SHAPE_CORE` / `SHAPE_EAST`。所以直管上的 core
+     * 根本看不出来，整根管是一条匀称的管。
+     *
+     * 之前这里用的是 0 通自己那套 `isolated-cube-size`（0.35），比管身（0.32）
+     * **粗 0.03** → 每个心都从管身上鼓出一小圈（用户："为啥心比臂粗一点啊"）。
+     * 现在统一：方块 = `bodyThickness`，箍 = `stripeFullWidth`（和管身的彩条同宽）。
+     * 于是心的**方块**和管身齐平（看不出来），**只有三个箍**露在外面 —— 和原版一致。
+     *
+     * @param offset 心相对 [spawn]（本格中心）的偏移
+     * @param name 实体名后缀 —— 一个方块里可能有多个心，必须唯一
+     */
+    private fun spawnHeart(spawn: Location, offset: Vector, name: String) {
+        // ⚠️ 心的方块粗细 = **管身粗细**，不是单独一套尺寸（见上面的说明）
+        val size = PipezConfig.bodyThickness
+        val half = size / 2.0
 
-        // ⚠️ 起点格朝反方向设了**断路** → 管身就从中心开始，不能再往外伸半格。
-        // 否则断路那一段仍然"顶着邻居"，看起来根本没断开。
-        val startOut = if (isDisabled(face.oppositeFace)) 0.0 else outwardReach(before)
-        // `runLength` 是"到最后一个直线方块中心"的距离。
-        // - 对面是同类管段（下一格是接头 / 拐弯）：再往前**一整格再加一点**（`1.0 + [OVERLAP]`），
-        //   够到那个接头方块的中心，保证拐角交叠；
-        // - 对面是机器 / 另一种管 → 齐平停在表面（`FACE_REACH`）；
-        // - 对面是空气 → 表面外一点（`FACE_REACH + [END_PROTRUSION]`），形成管口。
-        val endOut = when {
-            // 末端格朝外设了断路 → 管身停在**末端格中心**，和对面留出半格空隙
-            endBlock.isDisabled(face) -> 0.0
-            beyondConnectsBack -> 1.0 + OVERLAP
-            else -> outwardReach(beyond)
+        // 方块本体：沿 Y 轴、横截面 size×size、长度 size 的盒子。
+        // 和管身同粗 —— 管身自己带 jitter（最多小 0.004），所以这里不会共面。
+        addEntity(
+            "${DISPLAY_PREFIX}heart:$name:cube",
+            box(spawn, offset.clone().add(Vector(0.0, -half, 0.0)),
+                offset.clone().add(Vector(0.0, half, 0.0)),
+                size, size, pipeType.bodyMaterial, "single")
+        )
+
+        // 三个方向的箍（沿 X / Y / Z 各套一圈），宽度 = **管身彩条的全宽** ——
+        // 这样"心的箍"和"管身的彩条"在接头处一样宽，不会一边粗一边细。
+        // 尺寸逐个微调（0.0007），避免三个箍的侧面互相共面 → Z-fighting。
+        //
+        // ⚠️ 心的**方块**（上面那个）永远画 —— 它是管子的实心核心。
+        // 这三个箍是纯装饰，可关（见 config.yml 的 render.bands）：
+        // 关掉之后管子只剩"方块 + 臂 + 彩条"，是大型管网的省实体模式。
+        if (!PipezConfig.renderBands) return
+        val ringHalf = PipezConfig.bandLength * 0.5
+        listOf(
+            Vector(1.0, 0.0, 0.0),
+            Vector(0.0, 1.0, 0.0),
+            Vector(0.0, 0.0, 1.0)
+        ).forEachIndexed { index, dir ->
+            val ring = PipezConfig.stripeFullWidth - index * 0.0007f
+            addEntity(
+                "${DISPLAY_PREFIX}heart:$name:ring$index",
+                box(spawn, offset.clone().subtract(dir.clone().multiply(ringHalf)),
+                    offset.clone().add(dir.clone().multiply(ringHalf)),
+                    ring, ring, pipeType.stripeMaterial, "band")
+            )
         }
+    }
+
+    /**
+     * 画一整条直线段（从本方块一直画到这条直线的另一端）。
+     *
+     * 这是贪心合并的核心：一整条直线**只由起点格画一次**。
+     *
+     * ## 形态 = `心 臂 心`（不是"一根通到底的长条"）
+     *
+     * - **臂**：从本格中心到末端格中心，一条管身（[spawnRod]）。长度 = 两心间距。
+     * - **心**：**每一格中心一个**，造型 = 0 通（[spawnHeart]）。
+     *
+     * 所以 N 格直管 = N 个心 + (N-1) 段臂，跨度 ≈ N-1+0.35 格。
+     * 两根相邻管 → `心 臂 心`，≈ 1.35 格。
+     *
+     * ## ⚠️ 臂绝不能越过方块中心往外伸
+     *
+     * 旧实现按 [FarEnd] 往外收口（空气 → 0.54），管身成了 `-0.54 → 1.0+0.54`
+     * （**跨 2.08 格**）—— 既伸出本格西面、又捅穿邻格东面，视觉上就是
+     * "一截长条贯穿两格"，和相邻拐角块的臂连成一串 = 用户报的 `臂心臂心臂`。
+     */
+    private fun spawnRun(spawn: Location, face: BlockFace) {
+        val endBlock = walkRunEnd(face, canonicalAxis(face))
 
         val axis = face.direction.clone().normalize()
         val runLength = endBlock.block.location.toCenterLocation().toVector()
             .subtract(spawn.toVector()).length()
+        val backFace = face.oppositeFace
 
-        val bodyFrom = axis.clone().multiply(-startOut)
-        val bodyTo = axis.clone().multiply(runLength + endOut)
+        // 臂：**只连接相邻两个「心」** —— 从本格中心到末端格中心。
+        // 绝不越过方块中心往外伸：整根管到两端的心为止。
+        spawnRod(spawn, bodyName(face), Vector(0.0, 0.0, 0.0),
+            axis.clone().multiply(runLength), jitterFor(face))
 
-        // 管身和彩条共用同一组端点（彩条不另算，见 spawnRod 的注释）
-        spawnRod(spawn, bodyName(face), bodyFrom, bodyTo, jitterFor(face))
-
-        // 彩箍：只在**真正的格边界**放，而且跳过两端。
+        // ---------------------------------------------------------------
+        // 心：**每一格中心一个**，造型 = 0 通
+        // ---------------------------------------------------------------
         //
-        // ⚠️ 之前是 `offset = 0.5; while (offset <= runLength)` —— 2 通时 runLength = 1.0，
-        // 于是正好在正中间（0.5）放了一道箍，把一整根管从视觉上切成两截。
-        // 现在改成：**只有当那一格边界两侧都是管身**（即不是 run 的端点）时才放，
-        // 所以 2 通直管中间不会再出现那道箍。
-        // 彩箍同样是纯装饰，而且**每格一个**（长直管上也一样）——
-        // 关掉它对实体数的贡献最大（见 config.yml 的 render.bands）。
-        val bandT = PipezConfig.bandThickness - jitterFor(face)
-        val bandHalf = PipezConfig.bandLength * 0.5
-        var offset = 1.0
-        while (PipezConfig.renderBands && offset < runLength) {
-            val center = axis.clone().multiply(offset)
-            addEntity(
-                "${DISPLAY_PREFIX}band:${face.name}:$offset",
-                box(spawn, center.clone().subtract(axis.clone().multiply(bandHalf)),
-                    center.clone().add(axis.clone().multiply(bandHalf)),
-                    bandT, bandT, pipeType.stripeMaterial, "band")
-            )
-            offset += 1.0
+        // 2 格 → `心 臂 心`；N 格 → N 个心 + (N-1) 段臂。
+        // 这就是用户定下的形态 —— 不是"一根通到底的长条"。
+        val cells = runLength.roundToInt() + 1
+        for (i in 0 until cells) {
+            spawnHeart(spawn, axis.clone().multiply(i.toDouble()), "${face.name}:$i")
         }
 
         // ---------------------------------------------------------------
@@ -941,7 +1092,6 @@ class ConduitBlock :
         //
         // run 是"整条直线由起点格统一画"，所以机器端的板也必须在这里画 ——
         // 起点格的渲染里没有"另一端"的臂，`spawnSegment` 不会被调到那里。
-        val backFace = face.oppositeFace
         if (faceMode(backFace) == FaceMode.EXTRACT && isMachineFacing(backFace)) {
             // 起点侧：贴在**起点格**朝 backFace 的那一面
             spawnExtractPlate(spawn, backFace, FACE_REACH - EXTRACT_PLATE_THICK / 2.0)
@@ -963,8 +1113,15 @@ class ConduitBlock :
      */
     private fun isMachineFacing(face: BlockFace): Boolean {
         if (face !in CARDINAL_FACES) return false
-        val neighbor = rebarAt(block.getRelative(face)) ?: return false
-        if (neighbor is ConduitBlock) return false
+        // ⚠️ **不能**写成 `rebarAt(...) ?: return false` 提前退出。
+        //
+        // 物品管的"机器"就是**容器**，而绝大多数容器是原版方块（箱子 / 桶 / 漏斗），
+        // `rebarAt` 对它们一律返回 null —— 那样写会让"物品管从箱子抽取"**永远不画抽取黑板**，
+        // 于是"有胳膊却没有黑板"，正好违背上面"黑板与胳膊永远一致"的初衷。
+        //
+        // 判据只留 [connectsTo] 一个（它自己会看裸方块是不是容器）；
+        // 同类管要排除 —— 管段之间没有"机器"这个概念。
+        if (rebarAt(block.getRelative(face)) is ConduitBlock) return false
         return connectsTo(face)
     }
 
@@ -1084,12 +1241,6 @@ class ConduitBlock :
         // 现在只有"那一面真有对应端口"的机器才算机器，另一种管段一律按**空气**处理
         // （臂会带出可见管口，且和对方保持本格的边界，不会糊成一体）。
         val neighborIsMachine = !neighborIsConduit && machineLinkState(neighbor, face) != LinkState.ABSENT
-        // 对面是**另一种颜色**的管段。
-        //
-        // 这种邻居既不能"接上"（类型不同），也不该像空气那样把管口伸出去
-        // —— 伸出去会戳进对方方块，看起来两者贴在一起。所以它单独一档：
-        // **齐平停在本格表面**，既不糊在一起、也不越界。
-        val neighborIsOtherPipe = neighbor is ConduitBlock && neighbor.pipeType != pipeType
 
         // ---------------------------------------------------------------
         // 臂的端点
@@ -1115,12 +1266,12 @@ class ConduitBlock :
         //   对面是机器 → 齐平停在**本方块表面**（`FACE_REACH`），像插头插进去；
         //   对面是**另一种颜色的管** → 同样齐平停在表面，不戳进对方；
         //   对面是空气 → 比表面多伸一点（[END_PROTRUSION]），形成可见的管口。
+        //
+        // ⚠️ 远端收口**统一走 [farEndOf]**（判据 = [connectsTo]），
+        // 和直线段 [spawnRun] 共用同一套分类 —— 两个绘制路径绝不能再各写一份，
+        // 否则"视觉 ≠ 功能"就会从两份判据的分歧里再长出来。
         val nearOut = if (startIsEnd) FACE_REACH + END_PROTRUSION else OVERLAP
-        val farOut = when {
-            neighborIsConduit -> 1.0 + OVERLAP
-            neighborIsMachine || neighborIsOtherPipe -> FACE_REACH
-            else -> FACE_REACH + END_PROTRUSION
-        }
+        val farOut = reachFor(farEndOf(this, face))
 
         val bodyFrom = axis.clone().multiply(-nearOut)
         val bodyTo = axis.clone().multiply(farOut)
@@ -1167,19 +1318,13 @@ class ConduitBlock :
         // ⚠️ 管身和彩条共用**同一组基本端点**；彩条只在接头端伸到"盖住对方"的深度。
         spawnRod(spawn, bodyName(face), bodyFrom, bodyTo, jitterFor(face), stripeFrom, stripeTo)
 
-        // 彩箍：段中点套一圈。粗细要**只比管身粗一点点**，且和彩条全宽错开。
-        // 纯装饰，可关（见 config.yml 的 render.bands）—— 拐弯块**每条臂一个**，
-        // 是锯齿状管网里最容易被忽视的实体来源。
-        if (PipezConfig.renderBands) {
-            val mid = offset.clone().multiply(0.5)
-            val half = axis.clone().multiply(PipezConfig.bandLength * 0.5)
-            val bandT = PipezConfig.bandThickness - jitterFor(face)
-            addEntity(
-                bandName(face),
-                box(spawn, mid.clone().subtract(half), mid.clone().add(half),
-                    bandT, bandT, pipeType.stripeMaterial, "band")
-            )
-        }
+        // ⚠️ 这里**曾经**画一圈"段中点彩箍"（`offset × 0.5`，也就是**格边界**）。已删除：
+        //
+        // ① **位置错**：拐角的箍画在**格边界**，而直管的「心」画在**格中心** ——
+        //    两者根本不在同一个位置，是"拐角 vs 直管长得不一样"的一部分原因；
+        // ② **已被取代**：中心那个 [spawnHeart] 自带三个箍，它就是拐角/三通的接头标记。
+        //
+        // `render.bands` 现在只控制 [spawnHeart] 里那三个箍（见 spawnHeart）。
 
         // 方向指示：只在"这一面接着机器"时画。
         // 管段之间没有方向（同类管互通是双向的），画了只会让画面变乱。
@@ -1206,37 +1351,18 @@ class ConduitBlock :
     private fun jitterFor(face: BlockFace): Float = face.ordinal * JITTER_STEP
 
     /**
-     * 0 通：一个**黑色正方体** + **三个方向的黄色箍**（沿 X / Y / Z 各套一圈）。
+     * 0 通：**一个「心」** —— 黑方块 + 三个方向的箍（沿 X / Y / Z 各套一圈）。
      *
-     * 这是"这根还没接上"的标志。和真正的多路接头长得完全不一样，
-     * 不会像之前那样被误认成六通。
+     * 这是"这根还没接上"的标志。它同时也是**所有管段的中心核心** ——
+     * 直管上每一格中心都画同一个东西（见 [spawnHeart]），
+     * 所以"0 通"和"直管中间那一格"看起来完全一样。用户原话：
+     * "0 通你知道啥样吧，就是应该是一个臂两端都是 0 通"。
+     *
+     * ⚠️ 这里**直接复用 [spawnHeart]**，不再自己拼一遍几何 ——
+     * 两份手抄的几何一旦分叉，"0 通"和"管子的心"就会长得不一样。
      */
     private fun spawnIsolatedCube(spawn: Location) {
-        val size = PipezConfig.isolatedCubeSize
-        val half = size / 2.0
-
-        // 黑色正方体：用一根沿 Y 轴、横截面 size×size、长度 size 的盒子来画
-        addEntity(
-            "${DISPLAY_PREFIX}cube",
-            box(spawn, Vector(0.0, -half, 0.0), Vector(0.0, half, 0.0),
-                size, size, pipeType.bodyMaterial, "single")
-        )
-
-        // 三个黄色箍：每个方向套一圈，只比正方体大一点点。
-        // 尺寸逐个微调（0.0007），避免三个箍的侧面互相共面 → Z-fighting。
-        val ringHalf = PipezConfig.bandLength * 0.5
-        listOf(
-            Vector(1.0, 0.0, 0.0),
-            Vector(0.0, 1.0, 0.0),
-            Vector(0.0, 0.0, 1.0)
-        ).forEachIndexed { index, dir ->
-            val ringSize = PipezConfig.ringSize - index * 0.0007f
-            addEntity(
-                "${DISPLAY_PREFIX}ring$index",
-                box(spawn, dir.clone().multiply(-ringHalf), dir.clone().multiply(ringHalf),
-                    ringSize, ringSize, pipeType.stripeMaterial, "band")
-            )
-        }
+        spawnHeart(spawn, Vector(0.0, 0.0, 0.0), "single")
     }
 
     /**
@@ -1703,19 +1829,22 @@ class ConduitBlock :
             PipeType.Category.ITEM -> ItemTransfer.refresh(this)
         }
 
-        // 形状变了就重建显示实体（真实实体，spawn/remove 都不便宜，所以要去重）
+        // 几何变了就重建显示实体（真实实体，spawn/remove 都不便宜，所以要去重）
+        //
+        // ⚠️ 去重键是**几何签名**（[geometrySignature]），不是"六面掩码"。
+        // 签名覆盖了 [rebuildDisplays] 读到的全部输入（含整条 run 的长度与两端），
+        // 所以"远端变了、起点掩码没变"这种情况不会再被漏掉。
         if (forceDisplays) {
             // ⚠️ 强制重建：给"run 起点"用。
             //
-            // 为什么起点必须强制：贪婪合并把一整条直线交给**起点格**画，所以
-            // **起点格的渲染取决于整条 run 的长度**，而它自己的形状掩码在
-            // "远端加了一格"时**根本没变**。用掩码去重 → 起点跳过重建 →
-            // 新加的那一格永远不显示（用户："放了能量管道但没渲染"）。
+            // 为什么起点还要**额外**强制：签名本身要算"整条 run 有多长"，
+            // 而计算它的行走（[walkRunEnd]）依赖邻居已就位；在区块加载 / 同 tick
+            // 批量放置这种"邻居状态还在变"的时刻，签名可能算出和上次一样的结果。
             // 见 [ConduitNetwork.flush] 里"把 run 起点拉进 batch"的那一步。
-            lastDisplayMask = shapeMask()
+            lastDisplaySignature = geometrySignature()
             rebuildDisplays()
         } else {
-            refreshDisplaysIfShapeChanged(shapeMask())
+            refreshDisplaysIfSignatureChanged(geometrySignature())
         }
     }
 
@@ -2003,8 +2132,6 @@ class ConduitBlock :
         const val DISPLAY_PREFIX = "vis:"
 
         fun bodyName(face: BlockFace): String = "${DISPLAY_PREFIX}body:${face.name}"
-
-        fun bandName(face: BlockFace): String = "${DISPLAY_PREFIX}band:${face.name}"
 
         /** 相邻两段在方块中心的接缝重叠量，防止出现缝。 */
         const val OVERLAP = 0.02

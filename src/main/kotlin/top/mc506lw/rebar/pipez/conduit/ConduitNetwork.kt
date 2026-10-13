@@ -62,14 +62,37 @@ object ConduitNetwork {
         val batch = LinkedHashSet(dirty)
         dirty.clear()
 
-        // 第一轮：把每个脏格所属 run 的起点也拉进来。
+        // 第一轮：把每个脏格**影响到**的那些 run 的起点也拉进来。
         // 记下这些起点 —— 第二轮要**强制**它们重建显示（见下）。
         val runStarts = HashSet<BlockPosition>()
         for (pos in batch.toList()) {
             val conduit = rebarAt(pos) as? ConduitBlock ?: continue
+            // ① 本格自己所在的 run
             runStartOf(conduit)?.let {
                 runStarts += it
                 batch += it
+            }
+            // ② ⚠️ **穿过拐角 / 三通**的那些 run —— 这是"放置顺序不同 → 渲染不同"的另一半。
+            //
+            // [runStartOf] 第一句就是 `runAxis() ?: return null`，而拐角 / 三通的
+            // `runAxis()` 恰好是 null → **以它们为端点的那些 run 的起点永远进不了批次**。
+            // 于是那条 run 的起点不会被强制重建：它的几何（run 长度 / 末端收口）明明
+            // 该变，却既不重建也不清除 → **旧的显示实体留在世界上**。
+            // 用户实测：先放竖管、再在旁边接一格横管，拐角下方会残留一截旧管口。
+            //
+            // 只在"拐角 / 三通 / 十字"时才做这个额外遍历（见 [ConduitShape.crossRunDirections]）：
+            // 直管格（含度数 1 的端点）的同类邻居必定在同一条轴上，① 已经覆盖，
+            // 没必要再走一遍（每次都要沿轴走到底，代价 O(run 长度)）。
+            for (dir in ConduitShape.crossRunDirections(conduit.shapeMask())) {
+                val face = dir.toBlockFace()
+                if (!conduit.isConnectedOn(face)) continue
+                val next = rebarAt(pos.getRelative(face)) as? ConduitBlock ?: continue
+                // 异色管不在同一条 run 里（类型都不同），跳过
+                if (next.pipeType != conduit.pipeType) continue
+                runStartOf(next)?.let {
+                    runStarts += it
+                    batch += it
+                }
             }
         }
 

@@ -10,6 +10,7 @@ import top.mc506lw.rebar.pipez.bridge.VirtualInventoryBridge
 import top.mc506lw.rebar.pipez.cargo.ItemTransfer
 import top.mc506lw.rebar.pipez.conduit.ConduitNetwork
 import top.mc506lw.rebar.pipez.fluid.ConduitFluid
+import top.mc506lw.rebar.pipez.integration.SidedIoBridge
 import top.mc506lw.rebar.pipez.listeners.ConduitLinkListener
 import java.util.Locale
 
@@ -43,6 +44,14 @@ class PipezAddon : JavaPlugin(), RebarAddon {
         registerWithRebar()
 
         initializeBridges()
+
+        // Sided-IO（**软依赖**）：装了就把机器的面配置当权威。
+        // 两件事：① 接线判定（面=空 就不连）；② 面配置变更后重算管道形状。
+        // 没装就什么也不做 —— SidedIoBridge.available 为 false，内部直接返回。
+        SidedIoBridge.register(this)
+        if (SidedIoBridge.available) {
+            logger.info("Sided-IO detected: machine side config is authoritative (a face set to NONE refuses pipes).")
+        }
 
         PipezItems.initialize()
         PipezBlocks.initialize()

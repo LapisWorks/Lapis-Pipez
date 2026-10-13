@@ -13,6 +13,8 @@ group = project.properties["group"]!!
 
 repositories {
     mavenCentral()
+    // Sided-IO 发布在本地 Maven（同机开发）。见 dependencies 里的 compileOnly。
+    mavenLocal()
     maven("https://central.sonatype.com/repository/maven-snapshots/")
     maven("https://repo.papermc.io/repository/maven-public/") {
         name = "papermc"
@@ -37,6 +39,12 @@ dependencies {
 
     // 界面库（可选，不用 GUI 可以删掉）
     compileOnly("xyz.xenondevs.invui:invui:2.1.1")
+
+    // Sided-IO：**软依赖**，compileOnly 只提供编译期 API 形状。
+    // 运行时装不装都能跑 —— 没装就退回"管道自己判断"，见 integration/SidedIoBridge。
+    // 装了的话，管道会**问它**"这个面允不允许接"，让玩家的面配置成为权威
+    // （某个面设成"空"，管道就不连、也不画胳膊）。
+    compileOnly("top.mc506lw.rebar.sidedio:Sided-IO:0.1.0")
 
     compileOnly(kotlin("stdlib"))
 
@@ -86,6 +94,9 @@ bukkit {
     version = project.version.toString()
     apiVersion = "26.2"
     depend = listOf("Rebar")
+    // 软依赖 Sided-IO：装了就能读机器的面配置（"空面不连"），没装照常跑。
+    // 故意不写成 depend —— 管道不该因为一个可选的配置库而加载失败。
+    softDepend = listOf("Sided-IO")
     load = BukkitPluginDescription.PluginLoadOrder.STARTUP
 
     authors = listOf("mc506lw")
